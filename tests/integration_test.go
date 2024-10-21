@@ -3,6 +3,7 @@ package integration
 import (
 	"backupAndPrune/internal/backup"
 	"backupAndPrune/internal/config"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -13,17 +14,27 @@ import (
 // TestIntegrationRunBackup tests the full integration of the backup process
 func TestIntegrationRunBackup(t *testing.T) {
 	// Create temporary directories for logs and backups
-	logDir, err := ioutil.TempDir("", "logdir")
+	logDir, err := os.MkdirTemp("", "logdir")
 	if err != nil {
 		t.Fatalf("Failed to create temp log directory: %v", err)
 	}
-	defer os.RemoveAll(logDir)
+	defer func(path string) {
+		err := os.RemoveAll(path)
+		if err != nil {
+			fmt.Printf("Temp log folder err %s\n", err)
+		}
+	}(logDir)
 
-	backupDir, err := ioutil.TempDir("", "backupdir")
+	backupDir, err := os.MkdirTemp("", "backupdir")
 	if err != nil {
 		t.Fatalf("Failed to create temp backup directory: %v", err)
 	}
-	defer os.RemoveAll(backupDir)
+	defer func(path string) {
+		err := os.RemoveAll(path)
+		if err != nil {
+			fmt.Printf("Backup dir defer: %v\n", err)
+		}
+	}(backupDir)
 
 	// Create a test log file that should be backed up and pruned
 	oldFilePath := filepath.Join(logDir, "old.log")
@@ -82,13 +93,13 @@ func TestIntegrationRunBackup(t *testing.T) {
 // TestIntegrationRunBackupNoPrune ensures that when files are newer than PruneAfterHours, they are not backed up or pruned
 func TestIntegrationRunBackupNoPrune(t *testing.T) {
 	// Create temporary directories for logs and backups
-	logDir, err := ioutil.TempDir("", "logdir")
+	logDir, err := os.MkdirTemp("", "logdir")
 	if err != nil {
 		t.Fatalf("Failed to create temp log directory: %v", err)
 	}
 	defer os.RemoveAll(logDir)
 
-	backupDir, err := ioutil.TempDir("", "backupdir")
+	backupDir, err := os.MkdirTemp("", "backupdir")
 	if err != nil {
 		t.Fatalf("Failed to create temp backup directory: %v", err)
 	}

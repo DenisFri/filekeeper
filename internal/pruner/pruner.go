@@ -16,7 +16,6 @@ func PruneFiles(directory string, pruneThreshold time.Time) error {
 
 		// Check if the file modification time is older than the prune threshold
 		if !info.IsDir() && info.ModTime().Before(pruneThreshold) {
-			// Prune (delete) the original file
 			err = os.Remove(path)
 			if err != nil {
 				return err
