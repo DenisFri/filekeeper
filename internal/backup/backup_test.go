@@ -11,7 +11,6 @@ import (
 
 // TestRunBackup tests the RunBackup function
 func TestRunBackup(t *testing.T) {
-	// Create temporary directories for logs and backups
 	logDir, err := os.MkdirTemp("", "logdir")
 	if err != nil {
 		t.Fatalf("Failed to create temp log directory: %v", err)

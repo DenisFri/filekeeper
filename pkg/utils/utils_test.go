@@ -14,7 +14,6 @@ func TestExecuteRemoteCopy_SourceNotExist(t *testing.T) {
 }
 
 func TestExecuteRemoteCopy_EmptyDestination(t *testing.T) {
-	// Create a temp file
 	tmpDir, err := os.MkdirTemp("", "utils_test")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
@@ -33,7 +32,6 @@ func TestExecuteRemoteCopy_EmptyDestination(t *testing.T) {
 }
 
 func TestExecuteRemoteCopy_CommandInjectionPrevention(t *testing.T) {
-	// Create a temp file
 	tmpDir, err := os.MkdirTemp("", "utils_test")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
