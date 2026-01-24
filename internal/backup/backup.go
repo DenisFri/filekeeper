@@ -39,7 +39,7 @@ func RunBackup(cfg *config.Config) error {
 
 				// Optionally transfer the backup to a remote location
 				if cfg.RemoteBackup != "" {
-					err := utils.ExecuteCommand(fmt.Sprintf("scp %s %s", path, cfg.RemoteBackup))
+					err := utils.ExecuteRemoteCopy(path, cfg.RemoteBackup)
 					if err != nil {
 						return err
 					}
