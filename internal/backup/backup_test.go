@@ -1,7 +1,7 @@
 package backup
 
 import (
-	"backupAndPrune/internal/config"
+	"filekeeper/internal/config"
 	"io/ioutil"
 	"os"
 	"path/filepath"

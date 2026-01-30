@@ -1,9 +1,9 @@
 package backup
 
 import (
-	"backupAndPrune/internal/config"
-	"backupAndPrune/internal/pruner"
-	"backupAndPrune/pkg/utils"
+	"filekeeper/internal/config"
+	"filekeeper/internal/pruner"
+	"filekeeper/pkg/utils"
 	"fmt"
 	"os"
 	"path/filepath"

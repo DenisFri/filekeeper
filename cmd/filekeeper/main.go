@@ -1,8 +1,8 @@
 package main
 
 import (
-	"backupAndPrune/internal/backup"
-	"backupAndPrune/internal/config"
+	"filekeeper/internal/backup"
+	"filekeeper/internal/config"
 	"fmt"
 	"time"
 )

@@ -1,8 +1,8 @@
 package integration
 
 import (
-	"backupAndPrune/internal/backup"
-	"backupAndPrune/internal/config"
+	"filekeeper/internal/backup"
+	"filekeeper/internal/config"
 	"io/ioutil"
 	"os"
 	"path/filepath"
