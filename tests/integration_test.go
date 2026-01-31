@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"context"
 	"filekeeper/internal/backup"
 	"filekeeper/internal/config"
 	"filekeeper/internal/logger"
@@ -58,8 +59,9 @@ func TestIntegrationRunBackup(t *testing.T) {
 	}
 
 	// Run the backup process
+	ctx := context.Background()
 	log := testLogger()
-	err = backup.RunBackup(cfg, log)
+	err = backup.RunBackup(ctx, cfg, log)
 	if err != nil {
 		t.Fatalf("RunBackup failed: %v", err)
 	}
@@ -122,8 +124,9 @@ func TestIntegrationRunBackupNoPrune(t *testing.T) {
 	}
 
 	// Run the backup process
+	ctx := context.Background()
 	log := testLogger()
-	err = backup.RunBackup(cfg, log)
+	err = backup.RunBackup(ctx, cfg, log)
 	if err != nil {
 		t.Fatalf("RunBackup failed: %v", err)
 	}

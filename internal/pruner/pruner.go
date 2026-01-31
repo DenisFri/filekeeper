@@ -1,14 +1,24 @@
 package pruner
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
 )
 
-func PruneFiles(directory string, pruneThreshold time.Time, log *slog.Logger) error {
+// PruneFiles deletes files older than pruneThreshold from the specified directory.
+// It accepts a context for graceful shutdown support.
+func PruneFiles(ctx context.Context, directory string, pruneThreshold time.Time, log *slog.Logger) error {
 	err := filepath.Walk(directory, func(path string, info os.FileInfo, err error) error {
+		// Check for context cancellation before processing each file
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		if err != nil {
 			return err
 		}

@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"context"
 	"filekeeper/internal/config"
 	"filekeeper/internal/pruner"
 	"filekeeper/pkg/utils"
@@ -12,7 +13,8 @@ import (
 )
 
 // RunBackup handles the backup and pruning of log files based on the PruneAfterHours configuration.
-func RunBackup(cfg *config.Config, log *slog.Logger) error {
+// It accepts a context for graceful shutdown support.
+func RunBackup(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 
 	pruneThreshold := time.Now().Add(-time.Duration(cfg.PruneAfterHours) * time.Hour)
 
@@ -23,6 +25,13 @@ func RunBackup(cfg *config.Config, log *slog.Logger) error {
 		}
 
 		err = filepath.Walk(cfg.TargetFolder, func(path string, info os.FileInfo, err error) error {
+			// Check for context cancellation before processing each file
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+
 			if err != nil {
 				return err
 			}
@@ -57,6 +66,13 @@ func RunBackup(cfg *config.Config, log *slog.Logger) error {
 
 				// Optionally transfer the backup to a remote location
 				if cfg.RemoteBackup != "" {
+					// Check for cancellation before remote copy
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					default:
+					}
+
 					remoteStart := time.Now()
 					err := utils.ExecuteRemoteCopy(destPath, cfg.RemoteBackup)
 					if err != nil {
@@ -78,8 +94,15 @@ func RunBackup(cfg *config.Config, log *slog.Logger) error {
 		}
 	}
 
+	// Check for cancellation before pruning
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	// Call function to prune old files
-	err := pruner.PruneFiles(cfg.TargetFolder, pruneThreshold, log)
+	err := pruner.PruneFiles(ctx, cfg.TargetFolder, pruneThreshold, log)
 	if err != nil {
 		return err
 	}

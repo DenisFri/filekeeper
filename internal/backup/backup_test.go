@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"context"
 	"filekeeper/internal/config"
 	"filekeeper/internal/logger"
 	"log/slog"
@@ -56,8 +57,9 @@ func TestRunBackup(t *testing.T) {
 	}
 
 	// Run the backup
+	ctx := context.Background()
 	log := testLogger()
-	err = RunBackup(cfg, log)
+	err = RunBackup(ctx, cfg, log)
 	if err != nil {
 		t.Fatalf("RunBackup failed: %v", err)
 	}
@@ -138,8 +140,9 @@ func TestRunBackupPreservesDirectoryStructure(t *testing.T) {
 		RemoteBackup:    "",
 	}
 
+	ctx := context.Background()
 	log := testLogger()
-	err = RunBackup(cfg, log)
+	err = RunBackup(ctx, cfg, log)
 	if err != nil {
 		t.Fatalf("RunBackup failed: %v", err)
 	}
@@ -194,8 +197,9 @@ func TestRunBackupNoBackupFlag(t *testing.T) {
 	}
 
 	// Run the backup with backup disabled
+	ctx := context.Background()
 	log := testLogger()
-	err = RunBackup(cfg, log)
+	err = RunBackup(ctx, cfg, log)
 	if err != nil {
 		t.Fatalf("RunBackup failed: %v", err)
 	}
@@ -203,5 +207,49 @@ func TestRunBackupNoBackupFlag(t *testing.T) {
 	// Verify that the log file was pruned without backup
 	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
 		t.Errorf("Expected log file to be pruned (deleted), but it still exists")
+	}
+}
+
+// TestRunBackupContextCancellation tests that backup respects context cancellation
+func TestRunBackupContextCancellation(t *testing.T) {
+	logDir, err := os.MkdirTemp("", "logdir")
+	if err != nil {
+		t.Fatalf("Failed to create temp log directory: %v", err)
+	}
+	defer os.RemoveAll(logDir)
+
+	backupDir, err := os.MkdirTemp("", "backupdir")
+	if err != nil {
+		t.Fatalf("Failed to create temp backup directory: %v", err)
+	}
+	defer os.RemoveAll(backupDir)
+
+	// Create a test log file
+	filePath := filepath.Join(logDir, "test.log")
+	if err := os.WriteFile(filePath, []byte("test log data"), 0644); err != nil {
+		t.Fatalf("Failed to create test log file: %v", err)
+	}
+	oldModTime := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(filePath, oldModTime, oldModTime); err != nil {
+		t.Fatalf("Failed to set modification time: %v", err)
+	}
+
+	cfg := &config.Config{
+		PruneAfterHours: 24,
+		BackupPath:      backupDir,
+		EnableBackup:    true,
+		TargetFolder:    logDir,
+	}
+
+	// Create a cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	log := testLogger()
+	err = RunBackup(ctx, cfg, log)
+
+	// Should return context.Canceled error
+	if err != context.Canceled {
+		t.Errorf("Expected context.Canceled error, got: %v", err)
 	}
 }
