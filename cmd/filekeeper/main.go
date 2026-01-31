@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"filekeeper/internal/backup"
 	"filekeeper/internal/config"
 	"filekeeper/internal/logger"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 )
 
@@ -28,12 +31,48 @@ func main() {
 		slog.Bool("backup_enabled", cfg.EnableBackup),
 	)
 
+	// Create cancellable context for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Setup signal handling
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
+
+	go func() {
+		sig := <-sigChan
+		log.Info("shutdown signal received",
+			slog.String("signal", sig.String()),
+		)
+		log.Info("finishing current operation, please wait...")
+		cancel()
+	}()
+
 	// Run the service
 	for {
-		err := backup.RunBackup(cfg, log)
-		if err != nil {
-			log.Error("backup cycle failed", slog.String("error", err.Error()))
+		select {
+		case <-ctx.Done():
+			log.Info("shutdown complete")
+			return
+		default:
+			err := backup.RunBackup(ctx, cfg, log)
+			if err != nil {
+				// Don't log context cancellation as an error
+				if ctx.Err() != nil {
+					log.Info("backup interrupted by shutdown")
+				} else {
+					log.Error("backup cycle failed", slog.String("error", err.Error()))
+				}
+			}
+
+			// Check if shutdown was requested before sleeping
+			select {
+			case <-ctx.Done():
+				log.Info("shutdown complete")
+				return
+			case <-time.After(time.Duration(cfg.RunInterval) * time.Second):
+				// Continue to next iteration
+			}
 		}
-		time.Sleep(time.Duration(cfg.RunInterval) * time.Second)
 	}
 }
