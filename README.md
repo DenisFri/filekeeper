@@ -11,8 +11,12 @@ FileKeeper is a Go-based microservice that runs continuously in the background, 
 - **Automated Time-Based Management** - Automatically processes files older than a configurable threshold
 - **Local Backup** - Copies files to a local backup directory before deletion
 - **Remote Backup Support** - Optionally transfers backups to remote servers via SCP
-- **Flexible Configuration** - JSON-based configuration for easy customization
-- **Continuous Operation** - Runs as a long-lived service with configurable intervals
+- **Flexible Configuration** - JSON-based configuration with validation
+- **CLI Flags** - Command-line options for custom config, dry-run, single-run mode, and more
+- **Structured Logging** - Configurable log levels and formats (text/JSON) using Go's `log/slog`
+- **Graceful Shutdown** - Proper signal handling (SIGTERM, SIGINT) for clean shutdowns
+- **Comprehensive Error Handling** - Continues on individual file errors with configurable error thresholds
+- **Dry-Run Mode** - Preview what would happen without making changes
 - **Optional Backup Mode** - Can be configured for pruning-only operation
 - **Zero Dependencies** - Built entirely with Go standard library
 
@@ -20,7 +24,7 @@ FileKeeper is a Go-based microservice that runs continuously in the background, 
 
 ### From Source
 
-Requires Go 1.16 or later.
+Requires Go 1.21 or later.
 
 ```bash
 # Clone the repository
@@ -28,10 +32,10 @@ git clone https://github.com/DenisFri/filekeeper.git
 cd filekeeper
 
 # Build the binary
-go build -o filekeeper cmd/backupAndPrune/main.go
+go build -o filekeeper ./cmd/filekeeper
 
 # Or install directly
-go install ./cmd/backupAndPrune
+go install ./cmd/filekeeper
 ```
 
 ### Pre-built Binaries
@@ -49,7 +53,9 @@ Download the latest release from the [Releases page](https://github.com/DenisFri
   "run_interval": 3600,
   "backup_path": "/var/backups/myapp",
   "remote_backup": "",
-  "enable_backup": true
+  "enable_backup": true,
+  "log_level": "info",
+  "log_format": "text"
 }
 ```
 
@@ -61,26 +67,68 @@ Download the latest release from the [Releases page](https://github.com/DenisFri
 
 FileKeeper will now run continuously, checking for old files every hour (3600 seconds) and backing up/pruning files older than 24 hours.
 
+## Command-Line Interface
+
+FileKeeper supports various CLI flags for operational flexibility:
+
+```
+Usage: filekeeper [options]
+
+Options:
+  -c, --config string    Path to configuration file (default "config.json")
+  -1, --once             Run once and exit (no loop)
+  -n, --dry-run          Show what would be done without doing it
+  -v, --verbose          Enable verbose/debug logging
+  -V, --version          Show version and exit
+      --validate         Validate configuration and exit
+  -h, --help             Show this help message
+```
+
+### CLI Examples
+
+```bash
+# Use a custom config file
+filekeeper --config /etc/filekeeper/production.json
+
+# Run once and exit (great for cron jobs)
+filekeeper --once
+
+# Preview what would happen without making changes
+filekeeper --dry-run --once
+
+# Validate configuration before deploying
+filekeeper --validate --config new-config.json
+
+# Debug with verbose output
+filekeeper --verbose --once
+
+# Show version information
+filekeeper --version
+```
+
 ## Configuration
 
 FileKeeper uses a JSON configuration file (default: `config.json` in the current directory).
 
 ### Configuration Parameters
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `prune_after_hours` | float | Yes | Age threshold in hours. Files older than this will be processed. |
-| `target_folder` | string | Yes | Directory to monitor for old files. |
-| `run_interval` | int | Yes | Time in seconds between each check cycle. |
-| `backup_path` | string | Yes* | Local directory where backups will be stored. |
-| `remote_backup` | string | No | Remote SCP destination (format: `user@host:/path`). Leave empty to disable. |
-| `enable_backup` | bool | Yes | Enable/disable backup functionality. If `false`, only pruning occurs. |
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `prune_after_hours` | float | Yes | - | Age threshold in hours. Files older than this will be processed. |
+| `target_folder` | string | Yes | - | Directory to monitor for old files. |
+| `run_interval` | int | Yes | - | Time in seconds between each check cycle. |
+| `backup_path` | string | Yes* | - | Local directory where backups will be stored. |
+| `remote_backup` | string | No | `""` | Remote SCP destination (format: `user@host:/path`). |
+| `enable_backup` | bool | Yes | - | Enable/disable backup functionality. If `false`, only pruning occurs. |
+| `log_level` | string | No | `"info"` | Logging level: `debug`, `info`, `warn`, `error`. |
+| `log_format` | string | No | `"text"` | Log output format: `text` or `json`. |
+| `error_threshold_percent` | float | No | `0` | Stop processing if failure rate exceeds this percentage (0 = disabled). |
 
 *Required only if `enable_backup` is `true`.
 
 ### Configuration Examples
 
-#### Example 1: Log Rotation (Daily)
+#### Example 1: Log Rotation with Structured Logging
 
 ```json
 {
@@ -89,13 +137,13 @@ FileKeeper uses a JSON configuration file (default: `config.json` in the current
   "run_interval": 3600,
   "backup_path": "/var/backups/logs",
   "remote_backup": "",
-  "enable_backup": true
+  "enable_backup": true,
+  "log_level": "info",
+  "log_format": "json"
 }
 ```
 
-Checks hourly, backs up and deletes log files older than 24 hours.
-
-#### Example 2: Temporary File Cleanup (8 Hours)
+#### Example 2: With Error Threshold
 
 ```json
 {
@@ -104,11 +152,12 @@ Checks hourly, backs up and deletes log files older than 24 hours.
   "run_interval": 1800,
   "backup_path": "/archive/tmp",
   "remote_backup": "",
-  "enable_backup": true
+  "enable_backup": true,
+  "error_threshold_percent": 10
 }
 ```
 
-Checks every 30 minutes, backs up and deletes files older than 8 hours.
+Stops processing if more than 10% of files fail to backup/prune.
 
 #### Example 3: Prune-Only Mode
 
@@ -134,7 +183,8 @@ Checks daily, deletes files older than 72 hours without backing up.
   "run_interval": 3600,
   "backup_path": "/var/backups/logs",
   "remote_backup": "backup@storage.example.com:/backups/logs",
-  "enable_backup": true
+  "enable_backup": true,
+  "log_level": "debug"
 }
 ```
 
@@ -142,29 +192,32 @@ Backs up locally AND to a remote server via SCP before pruning.
 
 ## How It Works
 
-FileKeeper operates in a continuous loop with the following workflow:
+FileKeeper operates in a continuous loop (unless `--once` is specified) with the following workflow:
 
-1. **Load Configuration** - Reads the `config.json` file on startup
+1. **Load Configuration** - Reads and validates the configuration file
 2. **Calculate Threshold** - Determines the cutoff time based on `prune_after_hours`
 3. **Scan Directory** - Walks through all files in `target_folder` (including subdirectories)
 4. **Backup Old Files** (if `enable_backup` is `true`):
    - Identifies files with modification time older than the threshold
-   - Copies each file to `backup_path`
+   - Copies each file to `backup_path` (preserving directory structure)
    - Optionally transfers to `remote_backup` via SCP
 5. **Prune Files** - Deletes original files older than the threshold from `target_folder`
-6. **Sleep** - Waits for `run_interval` seconds before repeating
+6. **Report Results** - Logs summary with succeeded/failed/pruned counts
+7. **Sleep or Exit** - Waits for `run_interval` seconds (or exits if `--once`)
 
-### Time Threshold Logic
+### Graceful Shutdown
 
-Files are considered "old" if their **modification time** is older than:
-```
-current_time - prune_after_hours
-```
+FileKeeper handles shutdown signals (SIGTERM, SIGINT) gracefully:
+- Completes the current file operation
+- Logs shutdown status
+- Exits cleanly
 
-For example, with `prune_after_hours: 24`:
-- Current time: 2026-01-24 15:00:00
-- Threshold: 2026-01-23 15:00:00
-- Files modified before 2026-01-23 15:00:00 will be processed
+### Error Handling
+
+- Individual file errors are logged but processing continues
+- Failed file count is tracked and reported
+- If `error_threshold_percent` is set, processing stops when exceeded
+- Error details are available in the result summary
 
 ## Usage
 
@@ -173,6 +226,19 @@ For example, with `prune_after_hours: 24`:
 ```bash
 # Run with default config.json
 ./filekeeper
+
+# Run once (for cron jobs)
+./filekeeper --once
+
+# Preview changes without applying them
+./filekeeper --dry-run --once
+```
+
+### Cron Job Example
+
+```bash
+# Run every hour via cron
+0 * * * * /opt/filekeeper/filekeeper --once --config /etc/filekeeper/config.json >> /var/log/filekeeper.log 2>&1
 ```
 
 ### Systemd Service (Linux)
@@ -188,9 +254,13 @@ After=network.target
 Type=simple
 User=filekeeper
 WorkingDirectory=/opt/filekeeper
-ExecStart=/opt/filekeeper/filekeeper
+ExecStart=/opt/filekeeper/filekeeper --config /etc/filekeeper/config.json
 Restart=always
 RestartSec=10
+
+# Graceful shutdown
+TimeoutStopSec=30
+KillSignal=SIGTERM
 
 [Install]
 WantedBy=multi-user.target
@@ -210,7 +280,7 @@ sudo systemctl status filekeeper
 FROM golang:1.21-alpine AS builder
 WORKDIR /app
 COPY . .
-RUN go build -o filekeeper cmd/backupAndPrune/main.go
+RUN go build -o filekeeper ./cmd/filekeeper
 
 FROM alpine:latest
 RUN apk --no-cache add ca-certificates openssh-client
@@ -263,7 +333,8 @@ ssh backup@storage.example.com "echo 'Connection successful'"
 - Verify `enable_backup` is set to `true`
 - Check permissions on `target_folder` (read access required)
 - Check permissions on `backup_path` (write access required)
-- Review logs for error messages
+- Use `--verbose` flag to see detailed logs
+- Use `--dry-run` to preview what would happen
 
 ### Permission Denied Errors
 
@@ -286,59 +357,38 @@ ssh backup@storage.example.com "echo 'Connection successful'"
 - Ensure remote directory exists: `ssh user@host "mkdir -p /remote/path"`
 - Check firewall rules allow SSH/SCP traffic
 
-### Service Consuming Too Much CPU
+### Configuration Validation
 
-**Problem**: FileKeeper uses excessive CPU resources.
+**Problem**: Config file has errors.
 
-**Solutions**:
-- Increase `run_interval` to reduce check frequency
-- Reduce the number of files in `target_folder` (split into subdirectories)
-- Check for filesystem issues (slow disk I/O)
-
-### Disk Space Issues
-
-**Problem**: Backup directory filling up.
-
-**Solutions**:
-- Implement a separate cleanup process for old backups
-- Reduce `prune_after_hours` to clean up more frequently
-- Use `enable_backup: false` if backups aren't needed
-- Implement backup rotation strategy manually
-
-## Performance Considerations
-
-- **Large Directories**: FileKeeper walks the entire directory tree on each cycle. For directories with thousands of files, consider:
-  - Increasing `run_interval` to reduce frequency
-  - Splitting files into subdirectories by date
-  - Using faster storage (SSD vs HDD)
-
-- **Network Transfers**: Remote backups via SCP are synchronous and will block the cycle. For large files:
-  - Consider using background transfer jobs
-  - Implement batching or compression
-  - Use faster network connections
-
-- **File Count**: Current implementation processes files sequentially. For optimal performance:
-  - Keep individual file counts under 10,000 per cycle
-  - Monitor system resources (CPU, memory, disk I/O)
+**Solution**: Use the `--validate` flag to check configuration:
+```bash
+./filekeeper --validate --config config.json
+```
 
 ## Architecture
 
 ```
 filekeeper/
 ├── cmd/
-│   └── backupAndPrune/
-│       └── main.go           # Entry point
+│   └── filekeeper/
+│       └── main.go           # Entry point with CLI flags
 ├── internal/
 │   ├── backup/
 │   │   ├── backup.go         # Backup logic
-│   │   └── backup_test.go    # Unit tests
+│   │   ├── backup_test.go    # Unit tests
+│   │   └── result.go         # Result and RunOptions types
 │   ├── config/
-│   │   └── config.go         # Configuration loading
+│   │   ├── config.go         # Configuration loading and validation
+│   │   └── config_test.go    # Config tests
+│   ├── logger/
+│   │   └── logger.go         # Structured logging setup
 │   └── pruner/
-│       └── pruner.go         # File deletion logic
+│       ├── pruner.go         # File deletion logic
+│       └── result.go         # Pruner result types
 ├── pkg/
 │   └── utils/
-│       └── utils.go          # Utility functions
+│       └── utils.go          # Utility functions (file copy, scp)
 ├── tests/
 │   └── integration_test.go   # Integration tests
 └── config.json               # Configuration file
@@ -366,30 +416,36 @@ go test -v ./...
 
 ```bash
 # Build for current platform
-go build -o filekeeper cmd/backupAndPrune/main.go
+go build -o filekeeper ./cmd/filekeeper
+
+# Build with version info (for releases)
+go build -ldflags "-X main.Version=1.0.0 -X main.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.Commit=$(git rev-parse --short HEAD)" -o filekeeper ./cmd/filekeeper
 
 # Build for Linux
-GOOS=linux GOARCH=amd64 go build -o filekeeper-linux cmd/backupAndPrune/main.go
+GOOS=linux GOARCH=amd64 go build -o filekeeper-linux ./cmd/filekeeper
 
 # Build for macOS
-GOOS=darwin GOARCH=amd64 go build -o filekeeper-macos cmd/backupAndPrune/main.go
+GOOS=darwin GOARCH=amd64 go build -o filekeeper-macos ./cmd/filekeeper
 
 # Build for Windows
-GOOS=windows GOARCH=amd64 go build -o filekeeper.exe cmd/backupAndPrune/main.go
+GOOS=windows GOARCH=amd64 go build -o filekeeper.exe ./cmd/filekeeper
 ```
 
 ## Roadmap
 
 See [IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md) and [TASKS.md](TASKS.md) for detailed improvement plans, including:
 
-- Pattern-based file filtering (*.log, *.txt)
-- Compression support (gzip, zstd)
-- Checksum verification
-- Structured logging
-- CLI flags (--config, --dry-run, --once)
-- Backup retention policies
-- Multiple backup destinations
-- Progress reporting and metrics
+- [x] Configuration validation
+- [x] Structured logging (log/slog)
+- [x] Graceful shutdown with signal handling
+- [x] Comprehensive error handling and reporting
+- [x] CLI flags (--config, --dry-run, --once, --verbose, --version, --validate)
+- [ ] Pattern-based file filtering (*.log, *.txt)
+- [ ] Compression support (gzip, zstd)
+- [ ] Checksum verification
+- [ ] Backup retention policies
+- [ ] Multiple backup destinations
+- [ ] Progress reporting and metrics
 
 ## Contributing
 
@@ -414,10 +470,11 @@ Contributions are welcome! Please follow these steps:
 
 ## Security Considerations
 
-- **Command Injection**: Be cautious with `remote_backup` values. Future versions will improve input validation.
-- **File Permissions**: FileKeeper copies files but currently doesn't preserve extended attributes or ACLs.
-- **SSH Keys**: Protect SSH private keys used for remote backups with appropriate permissions (600).
-- **Sensitive Data**: Be aware that deleted files may still be recoverable until overwritten.
+- **Input Validation**: Configuration values are validated before use
+- **Command Injection**: Remote backup destination is validated to prevent injection attacks
+- **File Permissions**: FileKeeper copies files but currently doesn't preserve extended attributes or ACLs
+- **SSH Keys**: Protect SSH private keys used for remote backups with appropriate permissions (600)
+- **Sensitive Data**: Be aware that deleted files may still be recoverable until overwritten
 
 ## License
 
@@ -434,6 +491,6 @@ Built with Go standard library only - no external dependencies required.
 
 ---
 
-**Version**: 0.1.0
+**Version**: 1.0.0
 **Status**: Active Development
-**Go Version**: 1.16+
+**Go Version**: 1.21+
