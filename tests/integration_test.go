@@ -61,7 +61,7 @@ func TestIntegrationRunBackup(t *testing.T) {
 	// Run the backup process
 	ctx := context.Background()
 	log := testLogger()
-	result, err := backup.RunBackup(ctx, cfg, log)
+	result, err := backup.RunBackup(ctx, cfg, nil, log)
 	if err != nil {
 		t.Fatalf("RunBackup failed: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestIntegrationRunBackupNoPrune(t *testing.T) {
 	// Run the backup process
 	ctx := context.Background()
 	log := testLogger()
-	result, err := backup.RunBackup(ctx, cfg, log)
+	result, err := backup.RunBackup(ctx, cfg, nil, log)
 	if err != nil {
 		t.Fatalf("RunBackup failed: %v", err)
 	}

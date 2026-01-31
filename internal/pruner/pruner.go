@@ -12,7 +12,8 @@ import (
 // PruneFiles deletes files older than pruneThreshold from the specified directory.
 // It accepts a context for graceful shutdown support and returns a Result with success/failure counts.
 // Individual file errors are logged but processing continues unless error threshold is exceeded.
-func PruneFiles(ctx context.Context, directory string, pruneThreshold time.Time, errorThresholdPercent float64, log *slog.Logger) (*Result, error) {
+// If dryRun is true, it shows what would be deleted without actually deleting files.
+func PruneFiles(ctx context.Context, directory string, pruneThreshold time.Time, errorThresholdPercent float64, dryRun bool, log *slog.Logger) (*Result, error) {
 	result := NewResult()
 
 	err := filepath.Walk(directory, func(path string, info os.FileInfo, err error) error {
@@ -39,6 +40,17 @@ func PruneFiles(ctx context.Context, directory string, pruneThreshold time.Time,
 
 		if !info.ModTime().Before(pruneThreshold) {
 			result.Skipped++
+			return nil
+		}
+
+		// In dry-run mode, just log what would happen
+		if dryRun {
+			log.Info("[DRY-RUN] would prune file",
+				slog.String("path", path),
+				slog.Int64("size_bytes", info.Size()),
+				slog.Time("mod_time", info.ModTime()),
+			)
+			result.Pruned++
 			return nil
 		}
 
