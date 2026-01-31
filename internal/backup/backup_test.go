@@ -59,9 +59,20 @@ func TestRunBackup(t *testing.T) {
 	// Run the backup
 	ctx := context.Background()
 	log := testLogger()
-	err = RunBackup(ctx, cfg, log)
+	result, err := RunBackup(ctx, cfg, log)
 	if err != nil {
 		t.Fatalf("RunBackup failed: %v", err)
+	}
+
+	// Verify result
+	if result.BackedUp != 1 {
+		t.Errorf("Expected 1 file backed up, got %d", result.BackedUp)
+	}
+	if result.Pruned != 1 {
+		t.Errorf("Expected 1 file pruned, got %d", result.Pruned)
+	}
+	if result.HasErrors() {
+		t.Errorf("Expected no errors, got %d", result.Failed)
 	}
 
 	// Verify that the old log file was backed up
@@ -142,9 +153,14 @@ func TestRunBackupPreservesDirectoryStructure(t *testing.T) {
 
 	ctx := context.Background()
 	log := testLogger()
-	err = RunBackup(ctx, cfg, log)
+	result, err := RunBackup(ctx, cfg, log)
 	if err != nil {
 		t.Fatalf("RunBackup failed: %v", err)
+	}
+
+	// Verify result
+	if result.BackedUp != 2 {
+		t.Errorf("Expected 2 files backed up, got %d", result.BackedUp)
 	}
 
 	// Verify both files were backed up with directory structure preserved
@@ -199,9 +215,17 @@ func TestRunBackupNoBackupFlag(t *testing.T) {
 	// Run the backup with backup disabled
 	ctx := context.Background()
 	log := testLogger()
-	err = RunBackup(ctx, cfg, log)
+	result, err := RunBackup(ctx, cfg, log)
 	if err != nil {
 		t.Fatalf("RunBackup failed: %v", err)
+	}
+
+	// Verify result
+	if result.Pruned != 1 {
+		t.Errorf("Expected 1 file pruned, got %d", result.Pruned)
+	}
+	if result.BackedUp != 0 {
+		t.Errorf("Expected 0 files backed up, got %d", result.BackedUp)
 	}
 
 	// Verify that the log file was pruned without backup
@@ -246,10 +270,65 @@ func TestRunBackupContextCancellation(t *testing.T) {
 	cancel() // Cancel immediately
 
 	log := testLogger()
-	err = RunBackup(ctx, cfg, log)
+	_, err = RunBackup(ctx, cfg, log)
 
 	// Should return context.Canceled error
 	if err != context.Canceled {
 		t.Errorf("Expected context.Canceled error, got: %v", err)
+	}
+}
+
+// TestRunBackupReturnsResult tests that RunBackup returns a valid result
+func TestRunBackupReturnsResult(t *testing.T) {
+	logDir, err := os.MkdirTemp("", "logdir")
+	if err != nil {
+		t.Fatalf("Failed to create temp log directory: %v", err)
+	}
+	defer os.RemoveAll(logDir)
+
+	backupDir, err := os.MkdirTemp("", "backupdir")
+	if err != nil {
+		t.Fatalf("Failed to create temp backup directory: %v", err)
+	}
+	defer os.RemoveAll(backupDir)
+
+	// Create multiple test files
+	for i := 0; i < 3; i++ {
+		filePath := filepath.Join(logDir, filepath.Base(logDir)+string(rune('a'+i))+".log")
+		if err := os.WriteFile(filePath, []byte("test log data"), 0644); err != nil {
+			t.Fatalf("Failed to create test log file: %v", err)
+		}
+		oldModTime := time.Now().Add(-48 * time.Hour)
+		if err := os.Chtimes(filePath, oldModTime, oldModTime); err != nil {
+			t.Fatalf("Failed to set modification time: %v", err)
+		}
+	}
+
+	cfg := &config.Config{
+		PruneAfterHours: 24,
+		BackupPath:      backupDir,
+		EnableBackup:    true,
+		TargetFolder:    logDir,
+	}
+
+	ctx := context.Background()
+	log := testLogger()
+	result, err := RunBackup(ctx, cfg, log)
+	if err != nil {
+		t.Fatalf("RunBackup failed: %v", err)
+	}
+
+	// Verify result contains expected counts
+	if result.BackedUp != 3 {
+		t.Errorf("Expected 3 files backed up, got %d", result.BackedUp)
+	}
+	if result.Pruned != 3 {
+		t.Errorf("Expected 3 files pruned, got %d", result.Pruned)
+	}
+	if result.HasErrors() {
+		t.Errorf("Expected no errors, got %d", result.Failed)
+	}
+	if result.TotalBytes == 0 {
+		t.Error("Expected TotalBytes to be > 0")
 	}
 }

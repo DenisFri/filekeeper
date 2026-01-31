@@ -9,14 +9,15 @@ import (
 )
 
 type Config struct {
-	PruneAfterHours float32 `json:"prune_after_hours"`
-	TargetFolder    string  `json:"target_folder"`
-	RunInterval     int     `json:"run_interval"`
-	BackupPath      string  `json:"backup_path"`
-	RemoteBackup    string  `json:"remote_backup"`
-	EnableBackup    bool    `json:"enable_backup"`
-	LogLevel        string  `json:"log_level"`  // debug, info, warn, error (default: info)
-	LogFormat       string  `json:"log_format"` // text, json (default: text)
+	PruneAfterHours       float32 `json:"prune_after_hours"`
+	TargetFolder          string  `json:"target_folder"`
+	RunInterval           int     `json:"run_interval"`
+	BackupPath            string  `json:"backup_path"`
+	RemoteBackup          string  `json:"remote_backup"`
+	EnableBackup          bool    `json:"enable_backup"`
+	LogLevel              string  `json:"log_level"`               // debug, info, warn, error (default: info)
+	LogFormat             string  `json:"log_format"`              // text, json (default: text)
+	ErrorThresholdPercent float64 `json:"error_threshold_percent"` // max failure rate before stopping (0-100, default: 0 = disabled)
 }
 
 func LoadConfig(filePath string) (*Config, error) {
@@ -109,6 +110,11 @@ func (c *Config) Validate() error {
 		if format != "text" && format != "json" {
 			return fmt.Errorf("log_format must be 'text' or 'json'; got: %s", c.LogFormat)
 		}
+	}
+
+	// Validate error threshold percent
+	if c.ErrorThresholdPercent < 0 || c.ErrorThresholdPercent > 100 {
+		return fmt.Errorf("error_threshold_percent must be between 0 and 100, got: %f", c.ErrorThresholdPercent)
 	}
 
 	return nil

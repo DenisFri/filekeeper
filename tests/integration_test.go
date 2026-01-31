@@ -61,9 +61,17 @@ func TestIntegrationRunBackup(t *testing.T) {
 	// Run the backup process
 	ctx := context.Background()
 	log := testLogger()
-	err = backup.RunBackup(ctx, cfg, log)
+	result, err := backup.RunBackup(ctx, cfg, log)
 	if err != nil {
 		t.Fatalf("RunBackup failed: %v", err)
+	}
+
+	// Verify result
+	if result.BackedUp != 1 {
+		t.Errorf("Expected 1 file backed up, got %d", result.BackedUp)
+	}
+	if result.Pruned != 1 {
+		t.Errorf("Expected 1 file pruned, got %d", result.Pruned)
 	}
 
 	// Verify that the old log file was backed up
@@ -126,9 +134,17 @@ func TestIntegrationRunBackupNoPrune(t *testing.T) {
 	// Run the backup process
 	ctx := context.Background()
 	log := testLogger()
-	err = backup.RunBackup(ctx, cfg, log)
+	result, err := backup.RunBackup(ctx, cfg, log)
 	if err != nil {
 		t.Fatalf("RunBackup failed: %v", err)
+	}
+
+	// Verify result shows no files processed
+	if result.BackedUp != 0 {
+		t.Errorf("Expected 0 files backed up, got %d", result.BackedUp)
+	}
+	if result.Pruned != 0 {
+		t.Errorf("Expected 0 files pruned, got %d", result.Pruned)
 	}
 
 	// Verify that the new log file was not backed up

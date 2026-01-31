@@ -55,7 +55,28 @@ func main() {
 			log.Info("shutdown complete")
 			return
 		default:
-			err := backup.RunBackup(ctx, cfg, log)
+			result, err := backup.RunBackup(ctx, cfg, log)
+
+			// Log result summary
+			if result != nil {
+				if result.HasErrors() {
+					log.Warn("backup cycle completed with errors",
+						slog.Int("succeeded", result.Succeeded),
+						slog.Int("failed", result.Failed),
+						slog.Int("backed_up", result.BackedUp),
+						slog.Int("pruned", result.Pruned),
+						slog.Float64("failure_rate_percent", result.FailureRate()),
+					)
+				} else if result.Succeeded > 0 || result.Pruned > 0 {
+					log.Info("backup cycle completed",
+						slog.Int("succeeded", result.Succeeded),
+						slog.Int("backed_up", result.BackedUp),
+						slog.Int("pruned", result.Pruned),
+						slog.Int64("total_bytes", result.TotalBytes),
+					)
+				}
+			}
+
 			if err != nil {
 				// Don't log context cancellation as an error
 				if ctx.Err() != nil {
