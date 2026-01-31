@@ -3,11 +3,18 @@ package integration
 import (
 	"filekeeper/internal/backup"
 	"filekeeper/internal/config"
+	"filekeeper/internal/logger"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+// testLogger creates a logger for testing
+func testLogger() *slog.Logger {
+	return logger.New("info", "text")
+}
 
 // TestIntegrationRunBackup tests the full integration of the backup process
 func TestIntegrationRunBackup(t *testing.T) {
@@ -51,7 +58,8 @@ func TestIntegrationRunBackup(t *testing.T) {
 	}
 
 	// Run the backup process
-	err = backup.RunBackup(cfg)
+	log := testLogger()
+	err = backup.RunBackup(cfg, log)
 	if err != nil {
 		t.Fatalf("RunBackup failed: %v", err)
 	}
@@ -114,7 +122,8 @@ func TestIntegrationRunBackupNoPrune(t *testing.T) {
 	}
 
 	// Run the backup process
-	err = backup.RunBackup(cfg)
+	log := testLogger()
+	err = backup.RunBackup(cfg, log)
 	if err != nil {
 		t.Fatalf("RunBackup failed: %v", err)
 	}
