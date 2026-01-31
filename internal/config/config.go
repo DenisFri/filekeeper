@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 )
 
 type Config struct {
@@ -14,6 +15,8 @@ type Config struct {
 	BackupPath      string  `json:"backup_path"`
 	RemoteBackup    string  `json:"remote_backup"`
 	EnableBackup    bool    `json:"enable_backup"`
+	LogLevel        string  `json:"log_level"`  // debug, info, warn, error (default: info)
+	LogFormat       string  `json:"log_format"` // text, json (default: text)
 }
 
 func LoadConfig(filePath string) (*Config, error) {
@@ -81,6 +84,30 @@ func (c *Config) Validate() error {
 		remotePattern := regexp.MustCompile(`^([a-zA-Z0-9._-]+@)?[a-zA-Z0-9._-]+:.+$`)
 		if !remotePattern.MatchString(c.RemoteBackup) {
 			return fmt.Errorf("remote_backup has invalid format, expected user@host:/path or host:/path, got: %s", c.RemoteBackup)
+		}
+	}
+
+	// Validate log level if specified
+	if c.LogLevel != "" {
+		validLevels := []string{"debug", "info", "warn", "error"}
+		level := strings.ToLower(c.LogLevel)
+		valid := false
+		for _, v := range validLevels {
+			if level == v {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return fmt.Errorf("log_level must be one of: debug, info, warn, error; got: %s", c.LogLevel)
+		}
+	}
+
+	// Validate log format if specified
+	if c.LogFormat != "" {
+		format := strings.ToLower(c.LogFormat)
+		if format != "text" && format != "json" {
+			return fmt.Errorf("log_format must be 'text' or 'json'; got: %s", c.LogFormat)
 		}
 	}
 

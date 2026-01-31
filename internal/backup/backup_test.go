@@ -2,11 +2,18 @@ package backup
 
 import (
 	"filekeeper/internal/config"
+	"filekeeper/internal/logger"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+// testLogger creates a logger for testing
+func testLogger() *slog.Logger {
+	return logger.New("info", "text")
+}
 
 // TestRunBackup tests the RunBackup function
 func TestRunBackup(t *testing.T) {
@@ -49,7 +56,8 @@ func TestRunBackup(t *testing.T) {
 	}
 
 	// Run the backup
-	err = RunBackup(cfg)
+	log := testLogger()
+	err = RunBackup(cfg, log)
 	if err != nil {
 		t.Fatalf("RunBackup failed: %v", err)
 	}
@@ -130,7 +138,8 @@ func TestRunBackupPreservesDirectoryStructure(t *testing.T) {
 		RemoteBackup:    "",
 	}
 
-	err = RunBackup(cfg)
+	log := testLogger()
+	err = RunBackup(cfg, log)
 	if err != nil {
 		t.Fatalf("RunBackup failed: %v", err)
 	}
@@ -185,7 +194,8 @@ func TestRunBackupNoBackupFlag(t *testing.T) {
 	}
 
 	// Run the backup with backup disabled
-	err = RunBackup(cfg)
+	log := testLogger()
+	err = RunBackup(cfg, log)
 	if err != nil {
 		t.Fatalf("RunBackup failed: %v", err)
 	}

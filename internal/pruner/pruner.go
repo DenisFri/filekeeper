@@ -1,13 +1,13 @@
 package pruner
 
 import (
-	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
 )
 
-func PruneFiles(directory string, pruneThreshold time.Time) error {
+func PruneFiles(directory string, pruneThreshold time.Time, log *slog.Logger) error {
 	err := filepath.Walk(directory, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -18,7 +18,11 @@ func PruneFiles(directory string, pruneThreshold time.Time) error {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Pruned (deleted) %s\n", path)
+			log.Info("pruned file",
+				slog.String("path", path),
+				slog.Int64("size_bytes", info.Size()),
+				slog.Time("mod_time", info.ModTime()),
+			)
 		}
 
 		return nil

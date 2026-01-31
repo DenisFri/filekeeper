@@ -219,3 +219,73 @@ func TestLoadConfig_InvalidConfig(t *testing.T) {
 		t.Fatal("LoadConfig() expected error for invalid config, got nil")
 	}
 }
+
+func TestValidate_LogLevel(t *testing.T) {
+	tempDir := t.TempDir()
+
+	tests := []struct {
+		name     string
+		logLevel string
+		wantErr  bool
+	}{
+		{"empty (default)", "", false},
+		{"debug", "debug", false},
+		{"info", "info", false},
+		{"warn", "warn", false},
+		{"error", "error", false},
+		{"DEBUG uppercase", "DEBUG", false},
+		{"Info mixed case", "Info", false},
+		{"invalid level", "trace", true},
+		{"invalid level verbose", "verbose", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				PruneAfterHours: 24,
+				RunInterval:     3600,
+				TargetFolder:    tempDir,
+				EnableBackup:    false,
+				LogLevel:        tt.logLevel,
+			}
+			err := cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidate_LogFormat(t *testing.T) {
+	tempDir := t.TempDir()
+
+	tests := []struct {
+		name      string
+		logFormat string
+		wantErr   bool
+	}{
+		{"empty (default)", "", false},
+		{"text", "text", false},
+		{"json", "json", false},
+		{"TEXT uppercase", "TEXT", false},
+		{"JSON uppercase", "JSON", false},
+		{"invalid format", "xml", true},
+		{"invalid format yaml", "yaml", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				PruneAfterHours: 24,
+				RunInterval:     3600,
+				TargetFolder:    tempDir,
+				EnableBackup:    false,
+				LogFormat:       tt.logFormat,
+			}
+			err := cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
