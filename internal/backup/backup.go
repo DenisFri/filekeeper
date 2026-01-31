@@ -50,11 +50,11 @@ func RunBackup(cfg *config.Config) error {
 
 				// Optionally transfer the backup to a remote location
 				if cfg.RemoteBackup != "" {
-					err := utils.ExecuteRemoteCopy(path, cfg.RemoteBackup)
+					err := utils.ExecuteRemoteCopy(destPath, cfg.RemoteBackup)
 					if err != nil {
 						return err
 					}
-					fmt.Printf("Copied %s to remote backup at %s\n", path, cfg.RemoteBackup)
+					fmt.Printf("Copied %s to remote backup at %s\n", destPath, cfg.RemoteBackup)
 				}
 			}
 
