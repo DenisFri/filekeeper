@@ -27,7 +27,21 @@ func RunBackup(cfg *config.Config) error {
 			}
 
 			if !info.IsDir() && info.ModTime().Before(pruneThreshold) {
-				destPath := filepath.Join(cfg.BackupPath, filepath.Base(path))
+				// Calculate relative path to preserve directory structure
+				relPath, err := filepath.Rel(cfg.TargetFolder, path)
+				if err != nil {
+					return fmt.Errorf("failed to calculate relative path for %s: %w", path, err)
+				}
+
+				// Construct destination path preserving directory structure
+				destPath := filepath.Join(cfg.BackupPath, relPath)
+
+				// Create parent directories if they don't exist
+				destDir := filepath.Dir(destPath)
+				if err := os.MkdirAll(destDir, os.ModePerm); err != nil {
+					return fmt.Errorf("failed to create backup directory %s: %w", destDir, err)
+				}
+
 				err = utils.CopyFile(path, destPath)
 				if err != nil {
 					return err
