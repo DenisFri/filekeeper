@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -24,8 +25,13 @@ func RunBackup(ctx context.Context, cfg *config.Config, opts *RunOptions, log *s
 	pruneThreshold := time.Now().Add(-time.Duration(cfg.PruneAfterHours) * time.Hour)
 
 	if cfg.EnableBackup {
-		if err := os.MkdirAll(cfg.BackupPath, os.ModePerm); err != nil {
-			return result, fmt.Errorf("failed to create backup directory: %w", err)
+		backupPaths := cfg.GetBackupPaths()
+
+		// Create all backup directories
+		for _, backupPath := range backupPaths {
+			if err := os.MkdirAll(backupPath, os.ModePerm); err != nil {
+				return result, fmt.Errorf("failed to create backup directory %s: %w", backupPath, err)
+			}
 		}
 
 		err := filepath.Walk(cfg.TargetFolder, func(path string, info os.FileInfo, err error) error {
@@ -55,8 +61,8 @@ func RunBackup(ctx context.Context, cfg *config.Config, opts *RunOptions, log *s
 				return nil
 			}
 
-			// Process file that needs backup
-			if err := backupFile(ctx, path, info, cfg, opts, log, result); err != nil {
+			// Process file that needs backup to all destinations
+			if err := backupFileToAllDestinations(ctx, path, info, cfg, opts, log, result); err != nil {
 				// Check if this was a context cancellation
 				if ctx.Err() != nil {
 					return ctx.Err()
@@ -114,69 +120,136 @@ func RunBackup(ctx context.Context, cfg *config.Config, opts *RunOptions, log *s
 	return result, nil
 }
 
-// backupFile handles backing up a single file to local and optionally remote destinations.
-func backupFile(ctx context.Context, path string, info os.FileInfo, cfg *config.Config, opts *RunOptions, log *slog.Logger, result *Result) error {
+// backupFileToAllDestinations handles backing up a single file to all configured destinations.
+// Local backups are performed in parallel, remote backups are performed sequentially.
+func backupFileToAllDestinations(ctx context.Context, path string, info os.FileInfo, cfg *config.Config, opts *RunOptions, log *slog.Logger, result *Result) error {
 	// Calculate relative path to preserve directory structure
 	relPath, err := filepath.Rel(cfg.TargetFolder, path)
 	if err != nil {
 		return fmt.Errorf("calculate relative path: %w", err)
 	}
 
-	// Construct destination path preserving directory structure
-	destPath := filepath.Join(cfg.BackupPath, relPath)
+	backupPaths := cfg.GetBackupPaths()
+	remoteBackups := cfg.GetRemoteBackups()
 
 	// In dry-run mode, just log what would happen
 	if opts.DryRun {
-		log.Info("[DRY-RUN] would backup file",
-			slog.String("source", path),
-			slog.String("destination", destPath),
-			slog.Int64("size_bytes", info.Size()),
-		)
-		if cfg.RemoteBackup != "" {
+		for _, backupPath := range backupPaths {
+			destPath := filepath.Join(backupPath, relPath)
+			log.Info("[DRY-RUN] would backup file",
+				slog.String("source", path),
+				slog.String("destination", destPath),
+				slog.Int64("size_bytes", info.Size()),
+			)
+		}
+		for _, remote := range remoteBackups {
 			log.Info("[DRY-RUN] would copy to remote",
-				slog.String("source", destPath),
-				slog.String("remote", cfg.RemoteBackup),
+				slog.String("source", path),
+				slog.String("remote", remote),
 			)
 		}
 		return nil
 	}
 
-	// Create parent directories if they don't exist
-	destDir := filepath.Dir(destPath)
-	if err := os.MkdirAll(destDir, os.ModePerm); err != nil {
-		return fmt.Errorf("create backup directory %s: %w", destDir, err)
+	// Backup to all local destinations in parallel
+	var wg sync.WaitGroup
+	errChan := make(chan error, len(backupPaths))
+	successChan := make(chan string, len(backupPaths))
+
+	for _, backupPath := range backupPaths {
+		wg.Add(1)
+		go func(bp string) {
+			defer wg.Done()
+
+			destPath := filepath.Join(bp, relPath)
+
+			// Create parent directories if they don't exist
+			destDir := filepath.Dir(destPath)
+			if err := os.MkdirAll(destDir, os.ModePerm); err != nil {
+				errChan <- fmt.Errorf("create backup directory %s: %w", destDir, err)
+				return
+			}
+
+			startTime := time.Now()
+			if err := utils.CopyFile(path, destPath); err != nil {
+				errChan <- fmt.Errorf("copy to %s: %w", bp, err)
+				return
+			}
+
+			log.Info("backed up file",
+				slog.String("source", path),
+				slog.String("destination", destPath),
+				slog.Int64("size_bytes", info.Size()),
+				slog.Duration("duration", time.Since(startTime)),
+			)
+			successChan <- destPath
+		}(backupPath)
 	}
 
-	startTime := time.Now()
-	if err := utils.CopyFile(path, destPath); err != nil {
-		return fmt.Errorf("copy file: %w", err)
+	// Wait for all local backups to complete
+	wg.Wait()
+	close(errChan)
+	close(successChan)
+
+	// Collect errors from local backups
+	var localErrors []error
+	for err := range errChan {
+		localErrors = append(localErrors, err)
 	}
-	log.Info("backed up file",
-		slog.String("source", path),
-		slog.String("destination", destPath),
-		slog.Int64("size_bytes", info.Size()),
-		slog.Duration("duration", time.Since(startTime)),
-	)
 
-	// Optionally transfer the backup to a remote location
-	if cfg.RemoteBackup != "" {
-		// Check for cancellation before remote copy
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
+	// Collect successful local backup paths (for remote copy)
+	var successfulLocalPaths []string
+	for destPath := range successChan {
+		successfulLocalPaths = append(successfulLocalPaths, destPath)
+	}
 
-		remoteStart := time.Now()
-		if err := utils.ExecuteRemoteCopy(destPath, cfg.RemoteBackup); err != nil {
-			return fmt.Errorf("remote copy to %s: %w", cfg.RemoteBackup, err)
+	// If all local backups failed, return error
+	if len(successfulLocalPaths) == 0 && len(backupPaths) > 0 {
+		if len(localErrors) > 0 {
+			return fmt.Errorf("all local backups failed: %v", localErrors[0])
 		}
-		log.Info("copied to remote backup",
-			slog.String("source", destPath),
-			slog.String("remote", cfg.RemoteBackup),
-			slog.Duration("duration", time.Since(remoteStart)),
+		return fmt.Errorf("all local backups failed")
+	}
+
+	// Log warnings for any failed local backups (but continue since at least one succeeded)
+	for _, err := range localErrors {
+		log.Warn("local backup failed",
+			slog.String("path", path),
+			slog.String("error", err.Error()),
 		)
-		result.RemoteCopied++
+	}
+
+	// Backup to remote destinations sequentially (to avoid bandwidth saturation)
+	// Use the first successful local backup path as the source
+	if len(remoteBackups) > 0 && len(successfulLocalPaths) > 0 {
+		sourcePath := successfulLocalPaths[0]
+
+		for _, remote := range remoteBackups {
+			// Check for cancellation before each remote copy
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+
+			remoteStart := time.Now()
+			if err := utils.ExecuteRemoteCopy(sourcePath, remote); err != nil {
+				// Log warning but continue with other remote destinations
+				log.Warn("remote backup failed",
+					slog.String("source", sourcePath),
+					slog.String("remote", remote),
+					slog.String("error", err.Error()),
+				)
+				continue
+			}
+
+			log.Info("copied to remote backup",
+				slog.String("source", sourcePath),
+				slog.String("remote", remote),
+				slog.Duration("duration", time.Since(remoteStart)),
+			)
+			result.RemoteCopied++
+		}
 	}
 
 	return nil
