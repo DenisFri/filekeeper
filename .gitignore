@@ -4,4 +4,5 @@
 *.iml
 
 # Claude Code
+.claude
 CLAUDE.md
