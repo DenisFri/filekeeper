@@ -59,7 +59,7 @@ func TestRunBackup(t *testing.T) {
 	// Run the backup
 	ctx := context.Background()
 	log := testLogger()
-	result, err := RunBackup(ctx, cfg, log)
+	result, err := RunBackup(ctx, cfg, nil, log)
 	if err != nil {
 		t.Fatalf("RunBackup failed: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestRunBackupPreservesDirectoryStructure(t *testing.T) {
 
 	ctx := context.Background()
 	log := testLogger()
-	result, err := RunBackup(ctx, cfg, log)
+	result, err := RunBackup(ctx, cfg, nil, log)
 	if err != nil {
 		t.Fatalf("RunBackup failed: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestRunBackupNoBackupFlag(t *testing.T) {
 	// Run the backup with backup disabled
 	ctx := context.Background()
 	log := testLogger()
-	result, err := RunBackup(ctx, cfg, log)
+	result, err := RunBackup(ctx, cfg, nil, log)
 	if err != nil {
 		t.Fatalf("RunBackup failed: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestRunBackupContextCancellation(t *testing.T) {
 	cancel() // Cancel immediately
 
 	log := testLogger()
-	_, err = RunBackup(ctx, cfg, log)
+	_, err = RunBackup(ctx, cfg, nil, log)
 
 	// Should return context.Canceled error
 	if err != context.Canceled {
@@ -313,7 +313,7 @@ func TestRunBackupReturnsResult(t *testing.T) {
 
 	ctx := context.Background()
 	log := testLogger()
-	result, err := RunBackup(ctx, cfg, log)
+	result, err := RunBackup(ctx, cfg, nil, log)
 	if err != nil {
 		t.Fatalf("RunBackup failed: %v", err)
 	}
@@ -330,5 +330,62 @@ func TestRunBackupReturnsResult(t *testing.T) {
 	}
 	if result.TotalBytes == 0 {
 		t.Error("Expected TotalBytes to be > 0")
+	}
+}
+
+// TestRunBackupDryRun tests that dry-run mode doesn't modify files
+func TestRunBackupDryRun(t *testing.T) {
+	logDir, err := os.MkdirTemp("", "logdir")
+	if err != nil {
+		t.Fatalf("Failed to create temp log directory: %v", err)
+	}
+	defer os.RemoveAll(logDir)
+
+	backupDir, err := os.MkdirTemp("", "backupdir")
+	if err != nil {
+		t.Fatalf("Failed to create temp backup directory: %v", err)
+	}
+	defer os.RemoveAll(backupDir)
+
+	// Create a test log file that would be backed up and pruned
+	oldFilePath := filepath.Join(logDir, "old.log")
+	if err := os.WriteFile(oldFilePath, []byte("old log data"), 0644); err != nil {
+		t.Fatalf("Failed to create old log file: %v", err)
+	}
+	oldModTime := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(oldFilePath, oldModTime, oldModTime); err != nil {
+		t.Fatalf("Failed to set modification time: %v", err)
+	}
+
+	cfg := &config.Config{
+		PruneAfterHours: 24,
+		BackupPath:      backupDir,
+		EnableBackup:    true,
+		TargetFolder:    logDir,
+	}
+
+	// Run in dry-run mode
+	ctx := context.Background()
+	log := testLogger()
+	opts := &RunOptions{DryRun: true}
+	result, err := RunBackup(ctx, cfg, opts, log)
+	if err != nil {
+		t.Fatalf("RunBackup dry-run failed: %v", err)
+	}
+
+	// Result should still report what would be done
+	if result.Pruned != 1 {
+		t.Errorf("Expected 1 file would be pruned, got %d", result.Pruned)
+	}
+
+	// But the original file should still exist (not pruned)
+	if _, err := os.Stat(oldFilePath); os.IsNotExist(err) {
+		t.Errorf("Original file was deleted in dry-run mode!")
+	}
+
+	// And no backup should have been created
+	backupOldFilePath := filepath.Join(backupDir, "old.log")
+	if _, err := os.Stat(backupOldFilePath); !os.IsNotExist(err) {
+		t.Errorf("Backup file was created in dry-run mode!")
 	}
 }

@@ -15,7 +15,11 @@ import (
 // RunBackup handles the backup and pruning of log files based on the PruneAfterHours configuration.
 // It accepts a context for graceful shutdown support and returns a Result with success/failure counts.
 // Individual file errors are logged but processing continues unless error threshold is exceeded.
-func RunBackup(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Result, error) {
+// If opts.DryRun is true, it shows what would be done without making changes.
+func RunBackup(ctx context.Context, cfg *config.Config, opts *RunOptions, log *slog.Logger) (*Result, error) {
+	if opts == nil {
+		opts = &RunOptions{}
+	}
 	result := NewResult()
 	pruneThreshold := time.Now().Add(-time.Duration(cfg.PruneAfterHours) * time.Hour)
 
@@ -52,7 +56,7 @@ func RunBackup(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Resu
 			}
 
 			// Process file that needs backup
-			if err := backupFile(ctx, path, info, cfg, log, result); err != nil {
+			if err := backupFile(ctx, path, info, cfg, opts, log, result); err != nil {
 				// Check if this was a context cancellation
 				if ctx.Err() != nil {
 					return ctx.Err()
@@ -90,7 +94,7 @@ func RunBackup(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Resu
 	}
 
 	// Call function to prune old files
-	pruneResult, err := pruner.PruneFiles(ctx, cfg.TargetFolder, pruneThreshold, cfg.ErrorThresholdPercent, log)
+	pruneResult, err := pruner.PruneFiles(ctx, cfg.TargetFolder, pruneThreshold, cfg.ErrorThresholdPercent, opts.DryRun, log)
 	if pruneResult != nil {
 		result.Pruned = pruneResult.Pruned
 		result.Failed += pruneResult.Failed
@@ -111,7 +115,7 @@ func RunBackup(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Resu
 }
 
 // backupFile handles backing up a single file to local and optionally remote destinations.
-func backupFile(ctx context.Context, path string, info os.FileInfo, cfg *config.Config, log *slog.Logger, result *Result) error {
+func backupFile(ctx context.Context, path string, info os.FileInfo, cfg *config.Config, opts *RunOptions, log *slog.Logger, result *Result) error {
 	// Calculate relative path to preserve directory structure
 	relPath, err := filepath.Rel(cfg.TargetFolder, path)
 	if err != nil {
@@ -120,6 +124,22 @@ func backupFile(ctx context.Context, path string, info os.FileInfo, cfg *config.
 
 	// Construct destination path preserving directory structure
 	destPath := filepath.Join(cfg.BackupPath, relPath)
+
+	// In dry-run mode, just log what would happen
+	if opts.DryRun {
+		log.Info("[DRY-RUN] would backup file",
+			slog.String("source", path),
+			slog.String("destination", destPath),
+			slog.Int64("size_bytes", info.Size()),
+		)
+		if cfg.RemoteBackup != "" {
+			log.Info("[DRY-RUN] would copy to remote",
+				slog.String("source", destPath),
+				slog.String("remote", cfg.RemoteBackup),
+			)
+		}
+		return nil
+	}
 
 	// Create parent directories if they don't exist
 	destDir := filepath.Dir(destPath)

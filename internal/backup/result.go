@@ -2,6 +2,16 @@ package backup
 
 import "fmt"
 
+// RunOptions contains runtime options for the backup process.
+type RunOptions struct {
+	DryRun bool // If true, show what would be done without doing it
+}
+
+// ShouldExecute returns true if actual operations should be performed.
+func (o *RunOptions) ShouldExecute() bool {
+	return !o.DryRun
+}
+
 // FileError represents an error that occurred while processing a specific file.
 type FileError struct {
 	Path      string
