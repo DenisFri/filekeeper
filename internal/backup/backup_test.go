@@ -389,3 +389,203 @@ func TestRunBackupDryRun(t *testing.T) {
 		t.Errorf("Backup file was created in dry-run mode!")
 	}
 }
+
+// TestRunBackupMultipleLocalDestinations tests backup to multiple local destinations
+func TestRunBackupMultipleLocalDestinations(t *testing.T) {
+	logDir, err := os.MkdirTemp("", "logdir")
+	if err != nil {
+		t.Fatalf("Failed to create temp log directory: %v", err)
+	}
+	defer os.RemoveAll(logDir)
+
+	// Create two backup directories
+	backupDir1, err := os.MkdirTemp("", "backupdir1")
+	if err != nil {
+		t.Fatalf("Failed to create temp backup directory 1: %v", err)
+	}
+	defer os.RemoveAll(backupDir1)
+
+	backupDir2, err := os.MkdirTemp("", "backupdir2")
+	if err != nil {
+		t.Fatalf("Failed to create temp backup directory 2: %v", err)
+	}
+	defer os.RemoveAll(backupDir2)
+
+	// Create a test log file
+	oldFilePath := filepath.Join(logDir, "old.log")
+	content := []byte("old log data for multi-dest test")
+	if err := os.WriteFile(oldFilePath, content, 0644); err != nil {
+		t.Fatalf("Failed to create old log file: %v", err)
+	}
+	oldModTime := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(oldFilePath, oldModTime, oldModTime); err != nil {
+		t.Fatalf("Failed to set modification time: %v", err)
+	}
+
+	// Config with multiple backup paths
+	cfg := &config.Config{
+		PruneAfterHours: 24,
+		BackupPaths:     []string{backupDir1, backupDir2},
+		EnableBackup:    true,
+		TargetFolder:    logDir,
+	}
+
+	ctx := context.Background()
+	log := testLogger()
+	result, err := RunBackup(ctx, cfg, nil, log)
+	if err != nil {
+		t.Fatalf("RunBackup failed: %v", err)
+	}
+
+	// Verify result
+	if result.BackedUp != 1 {
+		t.Errorf("Expected 1 file backed up, got %d", result.BackedUp)
+	}
+
+	// Verify file was backed up to both destinations
+	backupFile1 := filepath.Join(backupDir1, "old.log")
+	backupFile2 := filepath.Join(backupDir2, "old.log")
+
+	content1, err := os.ReadFile(backupFile1)
+	if err != nil {
+		t.Errorf("Expected backup in dir1, got error: %v", err)
+	} else if string(content1) != string(content) {
+		t.Errorf("Backup1 content mismatch")
+	}
+
+	content2, err := os.ReadFile(backupFile2)
+	if err != nil {
+		t.Errorf("Expected backup in dir2, got error: %v", err)
+	} else if string(content2) != string(content) {
+		t.Errorf("Backup2 content mismatch")
+	}
+
+	// Verify original was pruned
+	if _, err := os.Stat(oldFilePath); !os.IsNotExist(err) {
+		t.Errorf("Original file should be pruned")
+	}
+}
+
+// TestRunBackupMixedPathConfig tests backward compatibility with both single and array paths
+func TestRunBackupMixedPathConfig(t *testing.T) {
+	logDir, err := os.MkdirTemp("", "logdir")
+	if err != nil {
+		t.Fatalf("Failed to create temp log directory: %v", err)
+	}
+	defer os.RemoveAll(logDir)
+
+	// Create three backup directories
+	backupDir1, err := os.MkdirTemp("", "backupdir1")
+	if err != nil {
+		t.Fatalf("Failed to create temp backup directory 1: %v", err)
+	}
+	defer os.RemoveAll(backupDir1)
+
+	backupDir2, err := os.MkdirTemp("", "backupdir2")
+	if err != nil {
+		t.Fatalf("Failed to create temp backup directory 2: %v", err)
+	}
+	defer os.RemoveAll(backupDir2)
+
+	backupDir3, err := os.MkdirTemp("", "backupdir3")
+	if err != nil {
+		t.Fatalf("Failed to create temp backup directory 3: %v", err)
+	}
+	defer os.RemoveAll(backupDir3)
+
+	// Create a test log file
+	oldFilePath := filepath.Join(logDir, "old.log")
+	content := []byte("test content")
+	if err := os.WriteFile(oldFilePath, content, 0644); err != nil {
+		t.Fatalf("Failed to create old log file: %v", err)
+	}
+	oldModTime := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(oldFilePath, oldModTime, oldModTime); err != nil {
+		t.Fatalf("Failed to set modification time: %v", err)
+	}
+
+	// Config with both single path and array paths (backward compatible)
+	cfg := &config.Config{
+		PruneAfterHours: 24,
+		BackupPath:      backupDir1,                       // Single path (backward compatible)
+		BackupPaths:     []string{backupDir2, backupDir3}, // Array paths
+		EnableBackup:    true,
+		TargetFolder:    logDir,
+	}
+
+	ctx := context.Background()
+	log := testLogger()
+	result, err := RunBackup(ctx, cfg, nil, log)
+	if err != nil {
+		t.Fatalf("RunBackup failed: %v", err)
+	}
+
+	if result.BackedUp != 1 {
+		t.Errorf("Expected 1 file backed up, got %d", result.BackedUp)
+	}
+
+	// Verify file was backed up to all three destinations
+	for i, backupDir := range []string{backupDir1, backupDir2, backupDir3} {
+		backupFile := filepath.Join(backupDir, "old.log")
+		if _, err := os.Stat(backupFile); os.IsNotExist(err) {
+			t.Errorf("Expected backup in dir%d (%s), but file not found", i+1, backupDir)
+		}
+	}
+}
+
+// TestRunBackupPartialLocalFailure tests that backup continues if one local destination fails
+func TestRunBackupPartialLocalFailure(t *testing.T) {
+	logDir, err := os.MkdirTemp("", "logdir")
+	if err != nil {
+		t.Fatalf("Failed to create temp log directory: %v", err)
+	}
+	defer os.RemoveAll(logDir)
+
+	// Create one valid backup directory
+	backupDir1, err := os.MkdirTemp("", "backupdir1")
+	if err != nil {
+		t.Fatalf("Failed to create temp backup directory 1: %v", err)
+	}
+	defer os.RemoveAll(backupDir1)
+
+	// Use a non-existent path that will fail (but not too long to avoid path issues)
+	invalidBackupDir := filepath.Join(os.TempDir(), "nonexistent_parent_12345", "child")
+
+	// Create a test log file
+	oldFilePath := filepath.Join(logDir, "old.log")
+	content := []byte("test content")
+	if err := os.WriteFile(oldFilePath, content, 0644); err != nil {
+		t.Fatalf("Failed to create old log file: %v", err)
+	}
+	oldModTime := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(oldFilePath, oldModTime, oldModTime); err != nil {
+		t.Fatalf("Failed to set modification time: %v", err)
+	}
+
+	// Config with one valid and one invalid backup path
+	cfg := &config.Config{
+		PruneAfterHours: 24,
+		BackupPaths:     []string{backupDir1, invalidBackupDir},
+		EnableBackup:    true,
+		TargetFolder:    logDir,
+	}
+
+	ctx := context.Background()
+	log := testLogger()
+	result, err := RunBackup(ctx, cfg, nil, log)
+
+	// Should succeed because at least one destination worked
+	if err != nil {
+		t.Fatalf("RunBackup should succeed with partial failure, got: %v", err)
+	}
+
+	if result.BackedUp != 1 {
+		t.Errorf("Expected 1 file backed up, got %d", result.BackedUp)
+	}
+
+	// Verify file was backed up to the valid destination
+	backupFile := filepath.Join(backupDir1, "old.log")
+	if _, err := os.Stat(backupFile); os.IsNotExist(err) {
+		t.Errorf("Expected backup in valid dir, but file not found")
+	}
+}

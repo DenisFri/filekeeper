@@ -9,15 +9,75 @@ import (
 )
 
 type Config struct {
-	PruneAfterHours       float32 `json:"prune_after_hours"`
-	TargetFolder          string  `json:"target_folder"`
-	RunInterval           int     `json:"run_interval"`
-	BackupPath            string  `json:"backup_path"`
-	RemoteBackup          string  `json:"remote_backup"`
-	EnableBackup          bool    `json:"enable_backup"`
-	LogLevel              string  `json:"log_level"`               // debug, info, warn, error (default: info)
-	LogFormat             string  `json:"log_format"`              // text, json (default: text)
-	ErrorThresholdPercent float64 `json:"error_threshold_percent"` // max failure rate before stopping (0-100, default: 0 = disabled)
+	PruneAfterHours       float32  `json:"prune_after_hours"`
+	TargetFolder          string   `json:"target_folder"`
+	RunInterval           int      `json:"run_interval"`
+	BackupPath            string   `json:"backup_path"`              // Single backup path (backward compatible)
+	BackupPaths           []string `json:"backup_paths"`             // Multiple backup paths
+	RemoteBackup          string   `json:"remote_backup"`            // Single remote backup (backward compatible)
+	RemoteBackups         []string `json:"remote_backups"`           // Multiple remote backups
+	EnableBackup          bool     `json:"enable_backup"`
+	LogLevel              string   `json:"log_level"`                // debug, info, warn, error (default: info)
+	LogFormat             string   `json:"log_format"`               // text, json (default: text)
+	ErrorThresholdPercent float64  `json:"error_threshold_percent"`  // max failure rate before stopping (0-100, default: 0 = disabled)
+}
+
+// GetBackupPaths returns all configured backup paths, merging single and multiple path configs.
+func (c *Config) GetBackupPaths() []string {
+	paths := make([]string, 0)
+
+	// Add single backup_path if set
+	if c.BackupPath != "" {
+		paths = append(paths, c.BackupPath)
+	}
+
+	// Add all backup_paths
+	for _, p := range c.BackupPaths {
+		if p != "" {
+			// Avoid duplicates
+			found := false
+			for _, existing := range paths {
+				if existing == p {
+					found = true
+					break
+				}
+			}
+			if !found {
+				paths = append(paths, p)
+			}
+		}
+	}
+
+	return paths
+}
+
+// GetRemoteBackups returns all configured remote backup destinations.
+func (c *Config) GetRemoteBackups() []string {
+	remotes := make([]string, 0)
+
+	// Add single remote_backup if set
+	if c.RemoteBackup != "" {
+		remotes = append(remotes, c.RemoteBackup)
+	}
+
+	// Add all remote_backups
+	for _, r := range c.RemoteBackups {
+		if r != "" {
+			// Avoid duplicates
+			found := false
+			for _, existing := range remotes {
+				if existing == r {
+					found = true
+					break
+				}
+			}
+			if !found {
+				remotes = append(remotes, r)
+			}
+		}
+	}
+
+	return remotes
 }
 
 func LoadConfig(filePath string) (*Config, error) {
@@ -69,22 +129,32 @@ func (c *Config) Validate() error {
 
 	// Validate backup settings
 	if c.EnableBackup {
-		if c.BackupPath == "" {
-			return fmt.Errorf("backup_path is required when enable_backup is true")
+		backupPaths := c.GetBackupPaths()
+		if len(backupPaths) == 0 {
+			return fmt.Errorf("at least one backup_path or backup_paths entry is required when enable_backup is true")
 		}
 
-		// Check if backup path's parent directory exists (backup dir will be created if needed)
-		parentDir := c.BackupPath
-		if info, err := os.Stat(parentDir); err == nil && !info.IsDir() {
-			return fmt.Errorf("backup_path exists but is not a directory: %s", c.BackupPath)
+		// Validate each backup path
+		for _, path := range backupPaths {
+			if info, err := os.Stat(path); err == nil && !info.IsDir() {
+				return fmt.Errorf("backup path exists but is not a directory: %s", path)
+			}
 		}
 	}
 
 	// Validate remote backup format if specified (user@host:/path or host:/path)
+	remotePattern := regexp.MustCompile(`^([a-zA-Z0-9._-]+@)?[a-zA-Z0-9._-]+:.+$`)
+
 	if c.RemoteBackup != "" {
-		remotePattern := regexp.MustCompile(`^([a-zA-Z0-9._-]+@)?[a-zA-Z0-9._-]+:.+$`)
 		if !remotePattern.MatchString(c.RemoteBackup) {
 			return fmt.Errorf("remote_backup has invalid format, expected user@host:/path or host:/path, got: %s", c.RemoteBackup)
+		}
+	}
+
+	// Validate all remote_backups entries
+	for _, remote := range c.RemoteBackups {
+		if remote != "" && !remotePattern.MatchString(remote) {
+			return fmt.Errorf("remote_backups entry has invalid format, expected user@host:/path or host:/path, got: %s", remote)
 		}
 	}
 
