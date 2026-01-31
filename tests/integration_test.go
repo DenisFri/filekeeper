@@ -3,7 +3,6 @@ package integration
 import (
 	"filekeeper/internal/backup"
 	"filekeeper/internal/config"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,13 +12,13 @@ import (
 // TestIntegrationRunBackup tests the full integration of the backup process
 func TestIntegrationRunBackup(t *testing.T) {
 	// Create temporary directories for logs and backups
-	logDir, err := ioutil.TempDir("", "logdir")
+	logDir, err := os.MkdirTemp("", "logdir")
 	if err != nil {
 		t.Fatalf("Failed to create temp log directory: %v", err)
 	}
 	defer os.RemoveAll(logDir)
 
-	backupDir, err := ioutil.TempDir("", "backupdir")
+	backupDir, err := os.MkdirTemp("", "backupdir")
 	if err != nil {
 		t.Fatalf("Failed to create temp backup directory: %v", err)
 	}
@@ -27,7 +26,7 @@ func TestIntegrationRunBackup(t *testing.T) {
 
 	// Create a test log file that should be backed up and pruned
 	oldFilePath := filepath.Join(logDir, "old.log")
-	if err := ioutil.WriteFile(oldFilePath, []byte("old log data"), 0644); err != nil {
+	if err := os.WriteFile(oldFilePath, []byte("old log data"), 0644); err != nil {
 		t.Fatalf("Failed to create old log file: %v", err)
 	}
 	// Modify the file's modification time to be older than the prune threshold
@@ -38,7 +37,7 @@ func TestIntegrationRunBackup(t *testing.T) {
 
 	// Create a test log file that should not be backed up or pruned
 	newFilePath := filepath.Join(logDir, "new.log")
-	if err := ioutil.WriteFile(newFilePath, []byte("new log data"), 0644); err != nil {
+	if err := os.WriteFile(newFilePath, []byte("new log data"), 0644); err != nil {
 		t.Fatalf("Failed to create new log file: %v", err)
 	}
 
@@ -82,13 +81,13 @@ func TestIntegrationRunBackup(t *testing.T) {
 // TestIntegrationRunBackupNoPrune ensures that when files are newer than PruneAfterHours, they are not backed up or pruned
 func TestIntegrationRunBackupNoPrune(t *testing.T) {
 	// Create temporary directories for logs and backups
-	logDir, err := ioutil.TempDir("", "logdir")
+	logDir, err := os.MkdirTemp("", "logdir")
 	if err != nil {
 		t.Fatalf("Failed to create temp log directory: %v", err)
 	}
 	defer os.RemoveAll(logDir)
 
-	backupDir, err := ioutil.TempDir("", "backupdir")
+	backupDir, err := os.MkdirTemp("", "backupdir")
 	if err != nil {
 		t.Fatalf("Failed to create temp backup directory: %v", err)
 	}
@@ -96,7 +95,7 @@ func TestIntegrationRunBackupNoPrune(t *testing.T) {
 
 	// Create a test log file that should not be backed up or pruned
 	newFilePath := filepath.Join(logDir, "new.log")
-	if err := ioutil.WriteFile(newFilePath, []byte("new log data"), 0644); err != nil {
+	if err := os.WriteFile(newFilePath, []byte("new log data"), 0644); err != nil {
 		t.Fatalf("Failed to create new log file: %v", err)
 	}
 	// Modify the file's modification time to be within the PruneAfterHours threshold

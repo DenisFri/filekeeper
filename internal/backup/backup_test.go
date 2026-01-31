@@ -2,7 +2,6 @@ package backup
 
 import (
 	"filekeeper/internal/config"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,7 +16,7 @@ func TestRunBackup(t *testing.T) {
 	}
 	defer os.RemoveAll(logDir)
 
-	backupDir, err := ioutil.TempDir("", "backupdir")
+	backupDir, err := os.MkdirTemp("", "backupdir")
 	if err != nil {
 		t.Fatalf("Failed to create temp backup directory: %v", err)
 	}
@@ -36,7 +35,7 @@ func TestRunBackup(t *testing.T) {
 
 	// Create a test log file that should not be backed up or pruned
 	newFilePath := filepath.Join(logDir, "new.log")
-	if err := ioutil.WriteFile(newFilePath, []byte("new log data"), 0644); err != nil {
+	if err := os.WriteFile(newFilePath, []byte("new log data"), 0644); err != nil {
 		t.Fatalf("Failed to create new log file: %v", err)
 	}
 
@@ -160,7 +159,7 @@ func TestRunBackupPreservesDirectoryStructure(t *testing.T) {
 // TestRunBackupNoBackupFlag tests the RunBackup function when backups are disabled
 func TestRunBackupNoBackupFlag(t *testing.T) {
 	// Create a temporary log directory
-	logDir, err := ioutil.TempDir("", "logdir")
+	logDir, err := os.MkdirTemp("", "logdir")
 	if err != nil {
 		t.Fatalf("Failed to create temp log directory: %v", err)
 	}
@@ -168,7 +167,7 @@ func TestRunBackupNoBackupFlag(t *testing.T) {
 
 	// Create a test log file that should be pruned without backup
 	filePath := filepath.Join(logDir, "test.log")
-	if err := ioutil.WriteFile(filePath, []byte("test log data"), 0644); err != nil {
+	if err := os.WriteFile(filePath, []byte("test log data"), 0644); err != nil {
 		t.Fatalf("Failed to create test log file: %v", err)
 	}
 	// Modify the file's modification time to be older than the prune threshold
