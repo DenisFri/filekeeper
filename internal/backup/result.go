@@ -25,14 +25,16 @@ func (e FileError) Error() string {
 
 // Result represents the outcome of a backup or prune operation.
 type Result struct {
-	Succeeded    int
-	Failed       int
-	Skipped      int
-	Errors       []FileError
-	TotalBytes   int64
-	BackedUp     int
-	Pruned       int
-	RemoteCopied int
+	Succeeded       int
+	Failed          int
+	Skipped         int
+	Errors          []FileError
+	TotalBytes      int64
+	BackedUp        int
+	Pruned          int
+	RemoteCopied    int
+	OriginalBytes   int64 // Total original bytes before compression
+	CompressedBytes int64 // Total compressed bytes (if compression enabled)
 }
 
 // NewResult creates a new empty Result.
@@ -84,7 +86,23 @@ func (r *Result) Merge(other *Result) {
 	r.BackedUp += other.BackedUp
 	r.Pruned += other.Pruned
 	r.RemoteCopied += other.RemoteCopied
+	r.OriginalBytes += other.OriginalBytes
+	r.CompressedBytes += other.CompressedBytes
 	r.Errors = append(r.Errors, other.Errors...)
+}
+
+// CompressionRatio returns the compression ratio as a percentage.
+// Returns 100 if no compression was used or no data was processed.
+func (r *Result) CompressionRatio() float64 {
+	if r.OriginalBytes == 0 {
+		return 100
+	}
+	return float64(r.CompressedBytes) / float64(r.OriginalBytes) * 100
+}
+
+// SpaceSaved returns the percentage of space saved by compression.
+func (r *Result) SpaceSaved() float64 {
+	return 100 - r.CompressionRatio()
 }
 
 // Summary returns a human-readable summary of the result.

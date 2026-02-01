@@ -589,3 +589,93 @@ func TestRunBackupPartialLocalFailure(t *testing.T) {
 		t.Errorf("Expected backup in valid dir, but file not found")
 	}
 }
+
+// TestRunBackupWithCompression tests backup with gzip compression enabled
+func TestRunBackupWithCompression(t *testing.T) {
+	logDir, err := os.MkdirTemp("", "logdir")
+	if err != nil {
+		t.Fatalf("Failed to create temp log directory: %v", err)
+	}
+	defer os.RemoveAll(logDir)
+
+	backupDir, err := os.MkdirTemp("", "backupdir")
+	if err != nil {
+		t.Fatalf("Failed to create temp backup directory: %v", err)
+	}
+	defer os.RemoveAll(backupDir)
+
+	// Create a test log file with compressible content
+	oldFilePath := filepath.Join(logDir, "old.log")
+	// Repeated content compresses well
+	content := []byte("This is test content that will compress well. " +
+		"Repeated patterns help compression. " +
+		"This is test content that will compress well. " +
+		"Repeated patterns help compression. ")
+	for i := 0; i < 100; i++ {
+		content = append(content, content...)
+		if len(content) > 10000 {
+			break
+		}
+	}
+
+	if err := os.WriteFile(oldFilePath, content, 0644); err != nil {
+		t.Fatalf("Failed to create old log file: %v", err)
+	}
+	oldModTime := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(oldFilePath, oldModTime, oldModTime); err != nil {
+		t.Fatalf("Failed to set modification time: %v", err)
+	}
+
+	// Config with compression enabled
+	cfg := &config.Config{
+		PruneAfterHours: 24,
+		BackupPath:      backupDir,
+		EnableBackup:    true,
+		TargetFolder:    logDir,
+		Compression: &config.CompressionConfig{
+			Enabled:   true,
+			Algorithm: "gzip",
+			Level:     6,
+		},
+	}
+
+	ctx := context.Background()
+	log := testLogger()
+	result, err := RunBackup(ctx, cfg, nil, log)
+	if err != nil {
+		t.Fatalf("RunBackup failed: %v", err)
+	}
+
+	// Verify result
+	if result.BackedUp != 1 {
+		t.Errorf("Expected 1 file backed up, got %d", result.BackedUp)
+	}
+
+	// Verify compressed file exists with .gz extension
+	compressedFile := filepath.Join(backupDir, "old.log.gz")
+	if _, err := os.Stat(compressedFile); os.IsNotExist(err) {
+		t.Errorf("Expected compressed file at %s, but not found", compressedFile)
+	}
+
+	// Verify uncompressed file does NOT exist
+	uncompressedFile := filepath.Join(backupDir, "old.log")
+	if _, err := os.Stat(uncompressedFile); !os.IsNotExist(err) {
+		t.Errorf("Uncompressed file should not exist at %s", uncompressedFile)
+	}
+
+	// Verify compression statistics
+	if result.OriginalBytes == 0 {
+		t.Error("Expected OriginalBytes > 0")
+	}
+	if result.CompressedBytes == 0 {
+		t.Error("Expected CompressedBytes > 0")
+	}
+	if result.CompressedBytes >= result.OriginalBytes {
+		t.Errorf("Expected compression to reduce size: original=%d, compressed=%d",
+			result.OriginalBytes, result.CompressedBytes)
+	}
+
+	t.Logf("Compression: original=%d, compressed=%d, ratio=%.1f%%, saved=%.1f%%",
+		result.OriginalBytes, result.CompressedBytes,
+		result.CompressionRatio(), result.SpaceSaved())
+}

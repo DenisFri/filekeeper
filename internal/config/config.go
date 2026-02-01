@@ -2,24 +2,56 @@ package config
 
 import (
 	"encoding/json"
+	"filekeeper/pkg/compression"
 	"fmt"
 	"os"
 	"regexp"
 	"strings"
 )
 
+// CompressionConfig holds compression settings for backups.
+type CompressionConfig struct {
+	Enabled   bool   `json:"enabled"`   // Enable compression for backups
+	Algorithm string `json:"algorithm"` // Compression algorithm: "none", "gzip"
+	Level     int    `json:"level"`     // Compression level (gzip: 1-9, default: 6)
+}
+
 type Config struct {
-	PruneAfterHours       float32  `json:"prune_after_hours"`
-	TargetFolder          string   `json:"target_folder"`
-	RunInterval           int      `json:"run_interval"`
-	BackupPath            string   `json:"backup_path"`              // Single backup path (backward compatible)
-	BackupPaths           []string `json:"backup_paths"`             // Multiple backup paths
-	RemoteBackup          string   `json:"remote_backup"`            // Single remote backup (backward compatible)
-	RemoteBackups         []string `json:"remote_backups"`           // Multiple remote backups
-	EnableBackup          bool     `json:"enable_backup"`
-	LogLevel              string   `json:"log_level"`                // debug, info, warn, error (default: info)
-	LogFormat             string   `json:"log_format"`               // text, json (default: text)
-	ErrorThresholdPercent float64  `json:"error_threshold_percent"`  // max failure rate before stopping (0-100, default: 0 = disabled)
+	PruneAfterHours       float32            `json:"prune_after_hours"`
+	TargetFolder          string             `json:"target_folder"`
+	RunInterval           int                `json:"run_interval"`
+	BackupPath            string             `json:"backup_path"`              // Single backup path (backward compatible)
+	BackupPaths           []string           `json:"backup_paths"`             // Multiple backup paths
+	RemoteBackup          string             `json:"remote_backup"`            // Single remote backup (backward compatible)
+	RemoteBackups         []string           `json:"remote_backups"`           // Multiple remote backups
+	EnableBackup          bool               `json:"enable_backup"`
+	LogLevel              string             `json:"log_level"`                // debug, info, warn, error (default: info)
+	LogFormat             string             `json:"log_format"`               // text, json (default: text)
+	ErrorThresholdPercent float64            `json:"error_threshold_percent"`  // max failure rate before stopping (0-100, default: 0 = disabled)
+	Compression           *CompressionConfig `json:"compression,omitempty"`    // Compression settings for backups
+}
+
+// GetCompressionConfig returns the compression configuration, converting to the pkg format.
+func (c *Config) GetCompressionConfig() *compression.Config {
+	if c.Compression == nil || !c.Compression.Enabled {
+		return &compression.Config{Enabled: false}
+	}
+
+	alg := compression.Algorithm(strings.ToLower(c.Compression.Algorithm))
+	if alg == "" {
+		alg = compression.Gzip // Default to gzip if enabled but no algorithm specified
+	}
+
+	level := c.Compression.Level
+	if level == 0 {
+		level = 6 // Default compression level
+	}
+
+	return &compression.Config{
+		Enabled:   true,
+		Algorithm: alg,
+		Level:     level,
+	}
 }
 
 // GetBackupPaths returns all configured backup paths, merging single and multiple path configs.
@@ -185,6 +217,14 @@ func (c *Config) Validate() error {
 	// Validate error threshold percent
 	if c.ErrorThresholdPercent < 0 || c.ErrorThresholdPercent > 100 {
 		return fmt.Errorf("error_threshold_percent must be between 0 and 100, got: %f", c.ErrorThresholdPercent)
+	}
+
+	// Validate compression settings
+	if c.Compression != nil && c.Compression.Enabled {
+		compressionCfg := c.GetCompressionConfig()
+		if err := compressionCfg.Validate(); err != nil {
+			return fmt.Errorf("compression: %w", err)
+		}
 	}
 
 	return nil
