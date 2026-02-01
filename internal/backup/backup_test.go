@@ -4,9 +4,11 @@ import (
 	"context"
 	"filekeeper/internal/config"
 	"filekeeper/internal/logger"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -678,4 +680,144 @@ func TestRunBackupWithCompression(t *testing.T) {
 	t.Logf("Compression: original=%d, compressed=%d, ratio=%.1f%%, saved=%.1f%%",
 		result.OriginalBytes, result.CompressedBytes,
 		result.CompressionRatio(), result.SpaceSaved())
+}
+
+func TestRunBackupArchiveMode(t *testing.T) {
+	// Create temp directories
+	logDir, err := os.MkdirTemp("", "logdir")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(logDir)
+
+	backupDir, err := os.MkdirTemp("", "backupdir")
+	if err != nil {
+		t.Fatalf("Failed to create backup dir: %v", err)
+	}
+	defer os.RemoveAll(backupDir)
+
+	// Create multiple old test files
+	oldTime := time.Now().Add(-48 * time.Hour)
+	files := []string{"file1.log", "file2.log", "file3.log"}
+	for _, name := range files {
+		filePath := filepath.Join(logDir, name)
+		content := strings.Repeat(fmt.Sprintf("Content of %s\n", name), 100)
+		if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		}
+		if err := os.Chtimes(filePath, oldTime, oldTime); err != nil {
+			t.Fatalf("Failed to set file time: %v", err)
+		}
+	}
+
+	// Config with archive mode enabled
+	cfg := &config.Config{
+		PruneAfterHours: 24,
+		TargetFolder:    logDir,
+		RunInterval:     60,
+		BackupPath:      backupDir,
+		EnableBackup:    true,
+		Archive: &config.ArchiveConfig{
+			Enabled: true,
+			Format:  "tar.gz",
+			GroupBy: "daily",
+		},
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	result, err := RunBackup(context.Background(), cfg, nil, logger)
+	if err != nil {
+		t.Fatalf("RunBackup failed: %v", err)
+	}
+
+	// Verify all files were backed up
+	if result.BackedUp != 3 {
+		t.Errorf("Expected 3 files backed up, got %d", result.BackedUp)
+	}
+
+	// Verify archive exists
+	archiveFiles, err := filepath.Glob(filepath.Join(backupDir, "backup-*.tar.gz"))
+	if err != nil {
+		t.Fatalf("Failed to glob archive files: %v", err)
+	}
+	if len(archiveFiles) != 1 {
+		t.Errorf("Expected 1 archive file, got %d", len(archiveFiles))
+	}
+
+	// Verify archive statistics
+	if result.ArchiveSize == 0 {
+		t.Error("Expected ArchiveSize > 0")
+	}
+	if result.OriginalBytes == 0 {
+		t.Error("Expected OriginalBytes > 0")
+	}
+
+	t.Logf("Archive: files=%d, original=%d, archive_size=%d, ratio=%.1f%%",
+		result.BackedUp, result.OriginalBytes, result.ArchiveSize, result.CompressionRatio())
+}
+
+func TestRunBackupArchiveModeDryRun(t *testing.T) {
+	// Create temp directories
+	logDir, err := os.MkdirTemp("", "logdir")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(logDir)
+
+	backupDir, err := os.MkdirTemp("", "backupdir")
+	if err != nil {
+		t.Fatalf("Failed to create backup dir: %v", err)
+	}
+	defer os.RemoveAll(backupDir)
+
+	// Create an old test file
+	oldFile := filepath.Join(logDir, "old.log")
+	content := strings.Repeat("Old content\n", 100)
+	if err := os.WriteFile(oldFile, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to create old file: %v", err)
+	}
+	oldTime := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(oldFile, oldTime, oldTime); err != nil {
+		t.Fatalf("Failed to set file time: %v", err)
+	}
+
+	// Config with archive mode enabled
+	cfg := &config.Config{
+		PruneAfterHours: 24,
+		TargetFolder:    logDir,
+		RunInterval:     60,
+		BackupPath:      backupDir,
+		EnableBackup:    true,
+		Archive: &config.ArchiveConfig{
+			Enabled: true,
+			Format:  "zip",
+			GroupBy: "weekly",
+		},
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	opts := &RunOptions{DryRun: true}
+	result, err := RunBackup(context.Background(), cfg, opts, logger)
+	if err != nil {
+		t.Fatalf("RunBackup failed: %v", err)
+	}
+
+	// In dry-run mode, no files should be backed up
+	if result.BackedUp != 0 {
+		t.Errorf("Expected 0 files backed up in dry-run, got %d", result.BackedUp)
+	}
+
+	// Verify no archive was created
+	archiveFiles, err := filepath.Glob(filepath.Join(backupDir, "backup-*"))
+	if err != nil {
+		t.Fatalf("Failed to glob archive files: %v", err)
+	}
+	if len(archiveFiles) != 0 {
+		t.Errorf("Expected no archive files in dry-run, got %d", len(archiveFiles))
+	}
+
+	// Verify source file still exists (not pruned in dry-run)
+	if _, err := os.Stat(oldFile); os.IsNotExist(err) {
+		t.Error("Source file should still exist in dry-run mode")
+	}
 }

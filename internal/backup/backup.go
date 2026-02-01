@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"filekeeper/internal/archive"
 	"filekeeper/internal/config"
 	"filekeeper/internal/pruner"
 	"filekeeper/pkg/compression"
@@ -27,6 +28,7 @@ func RunBackup(ctx context.Context, cfg *config.Config, opts *RunOptions, log *s
 
 	if cfg.EnableBackup {
 		backupPaths := cfg.GetBackupPaths()
+		archiveCfg := cfg.GetArchiveConfig()
 
 		// Create all backup directories
 		for _, backupPath := range backupPaths {
@@ -35,61 +37,70 @@ func RunBackup(ctx context.Context, cfg *config.Config, opts *RunOptions, log *s
 			}
 		}
 
-		err := filepath.Walk(cfg.TargetFolder, func(path string, info os.FileInfo, err error) error {
-			// Check for context cancellation before processing each file
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-
-			// Handle access errors - log and continue
+		// If archive mode is enabled, collect files and create archive
+		if archiveCfg.Enabled {
+			err := runArchiveBackup(ctx, cfg, archiveCfg, opts, log, result, pruneThreshold)
 			if err != nil {
-				log.Warn("failed to access file",
-					slog.String("path", path),
-					slog.String("error", err.Error()),
-				)
-				result.AddError(path, "access", err)
-				return nil // Continue walking
+				return result, err
 			}
-
-			if info.IsDir() {
-				return nil
-			}
-
-			if !info.ModTime().Before(pruneThreshold) {
-				result.Skipped++
-				return nil
-			}
-
-			// Process file that needs backup to all destinations
-			if err := backupFileToAllDestinations(ctx, path, info, cfg, opts, log, result); err != nil {
-				// Check if this was a context cancellation
-				if ctx.Err() != nil {
+		} else {
+			// Regular file-by-file backup
+			err := filepath.Walk(cfg.TargetFolder, func(path string, info os.FileInfo, err error) error {
+				// Check for context cancellation before processing each file
+				select {
+				case <-ctx.Done():
 					return ctx.Err()
+				default:
 				}
-				// Log error but continue processing
-				log.Error("backup failed",
-					slog.String("path", path),
-					slog.String("error", err.Error()),
-				)
-				result.AddError(path, "backup", err)
 
-				// Check error threshold
-				if cfg.ErrorThresholdPercent > 0 && result.FailureRate() > cfg.ErrorThresholdPercent {
-					return fmt.Errorf("error threshold exceeded: %.1f%% failures (threshold: %.1f%%)",
-						result.FailureRate(), cfg.ErrorThresholdPercent)
+				// Handle access errors - log and continue
+				if err != nil {
+					log.Warn("failed to access file",
+						slog.String("path", path),
+						slog.String("error", err.Error()),
+					)
+					result.AddError(path, "access", err)
+					return nil // Continue walking
 				}
-				return nil // Continue walking
+
+				if info.IsDir() {
+					return nil
+				}
+
+				if !info.ModTime().Before(pruneThreshold) {
+					result.Skipped++
+					return nil
+				}
+
+				// Process file that needs backup to all destinations
+				if err := backupFileToAllDestinations(ctx, path, info, cfg, opts, log, result); err != nil {
+					// Check if this was a context cancellation
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					// Log error but continue processing
+					log.Error("backup failed",
+						slog.String("path", path),
+						slog.String("error", err.Error()),
+					)
+					result.AddError(path, "backup", err)
+
+					// Check error threshold
+					if cfg.ErrorThresholdPercent > 0 && result.FailureRate() > cfg.ErrorThresholdPercent {
+						return fmt.Errorf("error threshold exceeded: %.1f%% failures (threshold: %.1f%%)",
+							result.FailureRate(), cfg.ErrorThresholdPercent)
+					}
+					return nil // Continue walking
+				}
+
+				result.AddSuccess(info.Size())
+				result.BackedUp++
+				return nil
+			})
+
+			if err != nil {
+				return result, err
 			}
-
-			result.AddSuccess(info.Size())
-			result.BackedUp++
-			return nil
-		})
-
-		if err != nil {
-			return result, err
 		}
 	}
 
@@ -119,6 +130,176 @@ func RunBackup(ctx context.Context, cfg *config.Config, opts *RunOptions, log *s
 	}
 
 	return result, nil
+}
+
+// runArchiveBackup collects files and creates archives for each backup destination.
+func runArchiveBackup(ctx context.Context, cfg *config.Config, archiveCfg *archive.Config, opts *RunOptions, log *slog.Logger, result *Result, pruneThreshold time.Time) error {
+	backupPaths := cfg.GetBackupPaths()
+	remoteBackups := cfg.GetRemoteBackups()
+
+	// Collect files that need to be archived
+	filesToArchive := make(map[string]string) // source path -> relative path in archive
+	var totalSize int64
+
+	err := filepath.Walk(cfg.TargetFolder, func(path string, info os.FileInfo, err error) error {
+		// Check for context cancellation
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		// Handle access errors
+		if err != nil {
+			log.Warn("failed to access file",
+				slog.String("path", path),
+				slog.String("error", err.Error()),
+			)
+			result.AddError(path, "access", err)
+			return nil
+		}
+
+		if info.IsDir() {
+			return nil
+		}
+
+		if !info.ModTime().Before(pruneThreshold) {
+			result.Skipped++
+			return nil
+		}
+
+		// Calculate relative path for the archive
+		relPath, err := filepath.Rel(cfg.TargetFolder, path)
+		if err != nil {
+			result.AddError(path, "path", err)
+			return nil
+		}
+
+		filesToArchive[path] = relPath
+		totalSize += info.Size()
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	if len(filesToArchive) == 0 {
+		log.Info("no files to archive")
+		return nil
+	}
+
+	archiveTime := time.Now()
+
+	// In dry-run mode, just log what would happen
+	if opts.DryRun {
+		archiveName := archive.GenerateArchiveName(archiveTime, archiveCfg.GroupBy, archiveCfg.Format)
+		for _, backupPath := range backupPaths {
+			archivePath := filepath.Join(backupPath, archiveName)
+			log.Info("[DRY-RUN] would create archive",
+				slog.String("archive", archivePath),
+				slog.Int("files_count", len(filesToArchive)),
+				slog.Int64("total_size_bytes", totalSize),
+				slog.String("format", string(archiveCfg.Format)),
+				slog.String("group_by", string(archiveCfg.GroupBy)),
+			)
+		}
+		for _, remote := range remoteBackups {
+			log.Info("[DRY-RUN] would copy archive to remote",
+				slog.String("remote", remote),
+			)
+		}
+		return nil
+	}
+
+	// Create archive for each backup destination
+	var archivePaths []string
+	for _, backupPath := range backupPaths {
+		startTime := time.Now()
+		creator := archive.NewCreator(archiveCfg, backupPath)
+
+		archiveResult, err := creator.CreateArchive(filesToArchive, archiveTime)
+		if err != nil {
+			log.Error("failed to create archive",
+				slog.String("backup_path", backupPath),
+				slog.String("error", err.Error()),
+			)
+			result.AddError(backupPath, "archive", err)
+			continue
+		}
+
+		archivePaths = append(archivePaths, archiveResult.ArchivePath)
+
+		log.Info("created archive",
+			slog.String("archive", archiveResult.ArchivePath),
+			slog.Int("files_archived", archiveResult.FilesArchived),
+			slog.Int64("total_size_bytes", archiveResult.TotalSize),
+			slog.Int64("archive_size_bytes", archiveResult.ArchiveSize),
+			slog.Float64("compression_ratio", archiveResult.CompressionRatio()),
+			slog.String("format", string(archiveCfg.Format)),
+			slog.Duration("duration", time.Since(startTime)),
+		)
+
+		// Track archive statistics
+		result.ArchiveSize = archiveResult.ArchiveSize
+		result.OriginalBytes += archiveResult.TotalSize
+		result.CompressedBytes += archiveResult.ArchiveSize
+	}
+
+	// If no archives were created, return error
+	if len(archivePaths) == 0 && len(backupPaths) > 0 {
+		return fmt.Errorf("all archive creations failed")
+	}
+
+	// Copy archive to remote destinations
+	if len(remoteBackups) > 0 && len(archivePaths) > 0 {
+		sourcePath := archivePaths[0]
+
+		for _, remote := range remoteBackups {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+
+			remoteStart := time.Now()
+			if err := utils.ExecuteRemoteCopy(sourcePath, remote); err != nil {
+				log.Warn("remote archive backup failed",
+					slog.String("source", sourcePath),
+					slog.String("remote", remote),
+					slog.String("error", err.Error()),
+				)
+				continue
+			}
+
+			log.Info("copied archive to remote",
+				slog.String("source", sourcePath),
+				slog.String("remote", remote),
+				slog.Duration("duration", time.Since(remoteStart)),
+			)
+			result.RemoteCopied++
+		}
+	}
+
+	// Mark all files in the archive as backed up
+	result.BackedUp = len(filesToArchive)
+	for _, size := range getFileSizes(filesToArchive) {
+		result.AddSuccess(size)
+	}
+
+	return nil
+}
+
+// getFileSizes returns a slice of file sizes for the given file paths.
+func getFileSizes(files map[string]string) []int64 {
+	sizes := make([]int64, 0, len(files))
+	for srcPath := range files {
+		info, err := os.Stat(srcPath)
+		if err == nil {
+			sizes = append(sizes, info.Size())
+		}
+	}
+	return sizes
 }
 
 // backupFileToAllDestinations handles backing up a single file to all configured destinations.
