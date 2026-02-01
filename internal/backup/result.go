@@ -33,8 +33,10 @@ type Result struct {
 	BackedUp        int
 	Pruned          int
 	RemoteCopied    int
-	OriginalBytes   int64 // Total original bytes before compression
-	CompressedBytes int64 // Total compressed bytes (if compression enabled)
+	OriginalBytes   int64  // Total original bytes before compression
+	CompressedBytes int64  // Total compressed bytes (if compression enabled)
+	ArchiveSize     int64  // Size of created archive (if archive mode enabled)
+	ArchivePath     string // Path to created archive (if archive mode enabled)
 }
 
 // NewResult creates a new empty Result.
@@ -88,6 +90,10 @@ func (r *Result) Merge(other *Result) {
 	r.RemoteCopied += other.RemoteCopied
 	r.OriginalBytes += other.OriginalBytes
 	r.CompressedBytes += other.CompressedBytes
+	r.ArchiveSize += other.ArchiveSize
+	if other.ArchivePath != "" && r.ArchivePath == "" {
+		r.ArchivePath = other.ArchivePath
+	}
 	r.Errors = append(r.Errors, other.Errors...)
 }
 

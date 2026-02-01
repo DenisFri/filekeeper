@@ -10,7 +10,10 @@ FileKeeper is a Go-based microservice that runs continuously in the background, 
 
 - **Automated Time-Based Management** - Automatically processes files older than a configurable threshold
 - **Local Backup** - Copies files to a local backup directory before deletion
+- **Multiple Backup Destinations** - Back up to multiple local directories and remote servers simultaneously
 - **Remote Backup Support** - Optionally transfers backups to remote servers via SCP
+- **Compression Support** - Gzip compression for backup files with configurable compression levels
+- **Archive Mode** - Bundle backup files into tar, tar.gz, or zip archives with daily/weekly/monthly grouping
 - **Flexible Configuration** - JSON-based configuration with validation
 - **CLI Flags** - Command-line options for custom config, dry-run, single-run mode, and more
 - **Structured Logging** - Configurable log levels and formats (text/JSON) using Go's `log/slog`
@@ -118,13 +121,35 @@ FileKeeper uses a JSON configuration file (default: `config.json` in the current
 | `target_folder` | string | Yes | - | Directory to monitor for old files. |
 | `run_interval` | int | Yes | - | Time in seconds between each check cycle. |
 | `backup_path` | string | Yes* | - | Local directory where backups will be stored. |
+| `backup_paths` | []string | No | `[]` | Multiple local backup destinations (in addition to `backup_path`). |
 | `remote_backup` | string | No | `""` | Remote SCP destination (format: `user@host:/path`). |
+| `remote_backups` | []string | No | `[]` | Multiple remote SCP destinations. |
 | `enable_backup` | bool | Yes | - | Enable/disable backup functionality. If `false`, only pruning occurs. |
 | `log_level` | string | No | `"info"` | Logging level: `debug`, `info`, `warn`, `error`. |
 | `log_format` | string | No | `"text"` | Log output format: `text` or `json`. |
 | `error_threshold_percent` | float | No | `0` | Stop processing if failure rate exceeds this percentage (0 = disabled). |
+| `compression` | object | No | - | Compression settings (see Compression section). |
+| `archive` | object | No | - | Archive mode settings (see Archive Mode section). |
 
 *Required only if `enable_backup` is `true`.
+
+### Compression Settings
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `compression.enabled` | bool | `false` | Enable gzip compression for backup files. |
+| `compression.algorithm` | string | `"gzip"` | Compression algorithm: `"none"` or `"gzip"`. |
+| `compression.level` | int | `6` | Compression level (1-9, higher = better compression but slower). |
+
+### Archive Mode Settings
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `archive.enabled` | bool | `false` | Enable archive mode (bundle files into archives). |
+| `archive.format` | string | `"tar.gz"` | Archive format: `"tar"`, `"tar.gz"`, or `"zip"`. |
+| `archive.group_by` | string | `"daily"` | Group files by: `"daily"`, `"weekly"`, or `"monthly"`. |
+
+**Note:** Archive mode and per-file compression cannot be enabled at the same time. Use archive format `tar.gz` for compressed archives.
 
 ### Configuration Examples
 
@@ -190,6 +215,82 @@ Checks daily, deletes files older than 72 hours without backing up.
 
 Backs up locally AND to a remote server via SCP before pruning.
 
+#### Example 5: Multiple Backup Destinations
+
+```json
+{
+  "prune_after_hours": 24,
+  "target_folder": "/var/log/critical",
+  "run_interval": 3600,
+  "backup_path": "/mnt/nas1/backups",
+  "backup_paths": ["/mnt/nas2/backups", "/mnt/usb-drive/backups"],
+  "remote_backups": [
+    "backup@dc1.example.com:/backups/logs",
+    "backup@dc2.example.com:/backups/logs"
+  ],
+  "enable_backup": true
+}
+```
+
+Backs up to 3 local destinations (in parallel) and 2 remote servers (sequentially).
+
+#### Example 6: With Compression
+
+```json
+{
+  "prune_after_hours": 24,
+  "target_folder": "/var/log/myapp",
+  "run_interval": 3600,
+  "backup_path": "/var/backups/logs",
+  "enable_backup": true,
+  "compression": {
+    "enabled": true,
+    "algorithm": "gzip",
+    "level": 6
+  }
+}
+```
+
+Compresses each file individually with gzip before backing up. Files are saved with `.gz` extension.
+
+#### Example 7: Archive Mode (Daily tar.gz)
+
+```json
+{
+  "prune_after_hours": 24,
+  "target_folder": "/var/log/myapp",
+  "run_interval": 86400,
+  "backup_path": "/var/backups/archives",
+  "enable_backup": true,
+  "archive": {
+    "enabled": true,
+    "format": "tar.gz",
+    "group_by": "daily"
+  }
+}
+```
+
+Creates daily archives like `backup-2026-01-15.tar.gz` containing all files older than 24 hours.
+
+#### Example 8: Archive Mode (Weekly ZIP)
+
+```json
+{
+  "prune_after_hours": 168,
+  "target_folder": "/data/reports",
+  "run_interval": 604800,
+  "backup_path": "/archive/reports",
+  "enable_backup": true,
+  "archive": {
+    "enabled": true,
+    "format": "zip",
+    "group_by": "weekly"
+  }
+}
+```
+
+Creates weekly ZIP archives like `backup-2026-W03.zip` containing all files older than 1 week.
+
 ## How It Works
 
 FileKeeper operates in a continuous loop (unless `--once` is specified) with the following workflow:
@@ -199,8 +300,11 @@ FileKeeper operates in a continuous loop (unless `--once` is specified) with the
 3. **Scan Directory** - Walks through all files in `target_folder` (including subdirectories)
 4. **Backup Old Files** (if `enable_backup` is `true`):
    - Identifies files with modification time older than the threshold
-   - Copies each file to `backup_path` (preserving directory structure)
-   - Optionally transfers to `remote_backup` via SCP
+   - **Regular Mode**: Copies each file to all backup destinations (preserving directory structure)
+   - **Compression Mode**: Compresses files with gzip before copying
+   - **Archive Mode**: Bundles all files into a single archive (tar, tar.gz, or zip)
+   - Local backups run in parallel; remote backups run sequentially
+   - Optionally transfers to all remote backup destinations via SCP
 5. **Prune Files** - Deletes original files older than the threshold from `target_folder`
 6. **Report Results** - Logs summary with succeeded/failed/pruned counts
 7. **Sleep or Exit** - Waits for `run_interval` seconds (or exits if `--once`)
@@ -374,8 +478,11 @@ filekeeper/
 │   └── filekeeper/
 │       └── main.go           # Entry point with CLI flags
 ├── internal/
+│   ├── archive/
+│   │   ├── archive.go        # Archive creation (tar, tar.gz, zip)
+│   │   └── archive_test.go   # Archive tests
 │   ├── backup/
-│   │   ├── backup.go         # Backup logic
+│   │   ├── backup.go         # Backup logic (multi-destination, compression, archive)
 │   │   ├── backup_test.go    # Unit tests
 │   │   └── result.go         # Result and RunOptions types
 │   ├── config/
@@ -387,6 +494,9 @@ filekeeper/
 │       ├── pruner.go         # File deletion logic
 │       └── result.go         # Pruner result types
 ├── pkg/
+│   ├── compression/
+│   │   ├── compression.go    # Gzip compression support
+│   │   └── compression_test.go
 │   └── utils/
 │       └── utils.go          # Utility functions (file copy, scp)
 ├── tests/
@@ -440,11 +550,12 @@ See [IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md) and [TASKS.md](TASKS.md) for deta
 - [x] Graceful shutdown with signal handling
 - [x] Comprehensive error handling and reporting
 - [x] CLI flags (--config, --dry-run, --once, --verbose, --version, --validate)
+- [x] Multiple backup destinations (local and remote)
+- [x] Compression support (gzip)
+- [x] Archive mode (tar, tar.gz, zip with daily/weekly/monthly grouping)
 - [ ] Pattern-based file filtering (*.log, *.txt)
-- [ ] Compression support (gzip, zstd)
 - [ ] Checksum verification
 - [ ] Backup retention policies
-- [ ] Multiple backup destinations
 - [ ] Progress reporting and metrics
 
 ## Contributing

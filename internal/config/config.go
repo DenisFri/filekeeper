@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"filekeeper/internal/archive"
 	"filekeeper/pkg/compression"
 	"fmt"
 	"os"
@@ -14,6 +15,13 @@ type CompressionConfig struct {
 	Enabled   bool   `json:"enabled"`   // Enable compression for backups
 	Algorithm string `json:"algorithm"` // Compression algorithm: "none", "gzip"
 	Level     int    `json:"level"`     // Compression level (gzip: 1-9, default: 6)
+}
+
+// ArchiveConfig holds archive mode settings for backups.
+type ArchiveConfig struct {
+	Enabled bool   `json:"enabled"`  // Enable archive mode (bundle files into single archive)
+	Format  string `json:"format"`   // Archive format: "tar", "tar.gz", "zip"
+	GroupBy string `json:"group_by"` // Group files by: "daily", "weekly", "monthly"
 }
 
 type Config struct {
@@ -29,6 +37,7 @@ type Config struct {
 	LogFormat             string             `json:"log_format"`               // text, json (default: text)
 	ErrorThresholdPercent float64            `json:"error_threshold_percent"`  // max failure rate before stopping (0-100, default: 0 = disabled)
 	Compression           *CompressionConfig `json:"compression,omitempty"`    // Compression settings for backups
+	Archive               *ArchiveConfig     `json:"archive,omitempty"`        // Archive mode settings for backups
 }
 
 // GetCompressionConfig returns the compression configuration, converting to the pkg format.
@@ -51,6 +60,29 @@ func (c *Config) GetCompressionConfig() *compression.Config {
 		Enabled:   true,
 		Algorithm: alg,
 		Level:     level,
+	}
+}
+
+// GetArchiveConfig returns the archive configuration, converting to the internal/archive format.
+func (c *Config) GetArchiveConfig() *archive.Config {
+	if c.Archive == nil || !c.Archive.Enabled {
+		return &archive.Config{Enabled: false}
+	}
+
+	format := archive.Format(strings.ToLower(c.Archive.Format))
+	if format == "" {
+		format = archive.FormatTarGz // Default to tar.gz if enabled but no format specified
+	}
+
+	groupBy := archive.GroupBy(strings.ToLower(c.Archive.GroupBy))
+	if groupBy == "" {
+		groupBy = archive.GroupByDaily // Default to daily grouping
+	}
+
+	return &archive.Config{
+		Enabled: true,
+		Format:  format,
+		GroupBy: groupBy,
 	}
 }
 
@@ -224,6 +256,19 @@ func (c *Config) Validate() error {
 		compressionCfg := c.GetCompressionConfig()
 		if err := compressionCfg.Validate(); err != nil {
 			return fmt.Errorf("compression: %w", err)
+		}
+	}
+
+	// Validate archive settings
+	if c.Archive != nil && c.Archive.Enabled {
+		archiveCfg := c.GetArchiveConfig()
+		if err := archiveCfg.Validate(); err != nil {
+			return fmt.Errorf("archive: %w", err)
+		}
+
+		// Archive mode and per-file compression are mutually exclusive
+		if c.Compression != nil && c.Compression.Enabled {
+			return fmt.Errorf("archive mode and compression cannot be enabled at the same time; use archive format 'tar.gz' for compressed archives")
 		}
 	}
 
