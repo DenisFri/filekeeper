@@ -1,8 +1,4 @@
-# IDE or editor files
-.idea/
-.bin/
+bin/
 *.iml
-
-# Claude Code
 .claude
 CLAUDE.md
