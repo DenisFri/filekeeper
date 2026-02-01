@@ -4,6 +4,7 @@ import (
 	"context"
 	"filekeeper/internal/config"
 	"filekeeper/internal/pruner"
+	"filekeeper/pkg/compression"
 	"filekeeper/pkg/utils"
 	"fmt"
 	"log/slog"
@@ -122,6 +123,7 @@ func RunBackup(ctx context.Context, cfg *config.Config, opts *RunOptions, log *s
 
 // backupFileToAllDestinations handles backing up a single file to all configured destinations.
 // Local backups are performed in parallel, remote backups are performed sequentially.
+// If compression is enabled, files are compressed during backup.
 func backupFileToAllDestinations(ctx context.Context, path string, info os.FileInfo, cfg *config.Config, opts *RunOptions, log *slog.Logger, result *Result) error {
 	// Calculate relative path to preserve directory structure
 	relPath, err := filepath.Rel(cfg.TargetFolder, path)
@@ -131,15 +133,18 @@ func backupFileToAllDestinations(ctx context.Context, path string, info os.FileI
 
 	backupPaths := cfg.GetBackupPaths()
 	remoteBackups := cfg.GetRemoteBackups()
+	compressionCfg := cfg.GetCompressionConfig()
 
 	// In dry-run mode, just log what would happen
 	if opts.DryRun {
 		for _, backupPath := range backupPaths {
 			destPath := filepath.Join(backupPath, relPath)
+			finalPath := compression.GetDestinationPath(destPath, compressionCfg)
 			log.Info("[DRY-RUN] would backup file",
 				slog.String("source", path),
-				slog.String("destination", destPath),
+				slog.String("destination", finalPath),
 				slog.Int64("size_bytes", info.Size()),
+				slog.Bool("compressed", compressionCfg.Enabled),
 			)
 		}
 		for _, remote := range remoteBackups {
@@ -154,7 +159,11 @@ func backupFileToAllDestinations(ctx context.Context, path string, info os.FileI
 	// Backup to all local destinations in parallel
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(backupPaths))
-	successChan := make(chan string, len(backupPaths))
+	type backupResult struct {
+		destPath       string
+		compressResult *compression.Result
+	}
+	successChan := make(chan backupResult, len(backupPaths))
 
 	for _, backupPath := range backupPaths {
 		wg.Add(1)
@@ -171,18 +180,36 @@ func backupFileToAllDestinations(ctx context.Context, path string, info os.FileI
 			}
 
 			startTime := time.Now()
-			if err := utils.CopyFile(path, destPath); err != nil {
-				errChan <- fmt.Errorf("copy to %s: %w", bp, err)
+
+			// Use compression if enabled, otherwise do regular copy
+			compResult, err := compression.CompressFile(path, destPath, compressionCfg)
+			if err != nil {
+				errChan <- fmt.Errorf("backup to %s: %w", bp, err)
 				return
 			}
 
-			log.Info("backed up file",
-				slog.String("source", path),
-				slog.String("destination", destPath),
-				slog.Int64("size_bytes", info.Size()),
-				slog.Duration("duration", time.Since(startTime)),
-			)
-			successChan <- destPath
+			finalPath := compression.GetDestinationPath(destPath, compressionCfg)
+
+			// Log with compression info if enabled
+			if compressionCfg.Enabled && compResult.Algorithm != compression.None {
+				log.Info("backed up file (compressed)",
+					slog.String("source", path),
+					slog.String("destination", finalPath),
+					slog.Int64("original_bytes", compResult.OriginalSize),
+					slog.Int64("compressed_bytes", compResult.CompressedSize),
+					slog.Float64("compression_ratio", compResult.CompressionRatio()),
+					slog.String("algorithm", string(compResult.Algorithm)),
+					slog.Duration("duration", time.Since(startTime)),
+				)
+			} else {
+				log.Info("backed up file",
+					slog.String("source", path),
+					slog.String("destination", finalPath),
+					slog.Int64("size_bytes", info.Size()),
+					slog.Duration("duration", time.Since(startTime)),
+				)
+			}
+			successChan <- backupResult{destPath: finalPath, compressResult: compResult}
 		}(backupPath)
 	}
 
@@ -197,14 +224,20 @@ func backupFileToAllDestinations(ctx context.Context, path string, info os.FileI
 		localErrors = append(localErrors, err)
 	}
 
-	// Collect successful local backup paths (for remote copy)
-	var successfulLocalPaths []string
-	for destPath := range successChan {
-		successfulLocalPaths = append(successfulLocalPaths, destPath)
+	// Collect successful local backup results (for remote copy and compression stats)
+	var successfulResults []backupResult
+	for br := range successChan {
+		successfulResults = append(successfulResults, br)
+
+		// Track compression statistics
+		if br.compressResult != nil && compressionCfg.Enabled {
+			result.CompressedBytes += br.compressResult.CompressedSize
+			result.OriginalBytes += br.compressResult.OriginalSize
+		}
 	}
 
 	// If all local backups failed, return error
-	if len(successfulLocalPaths) == 0 && len(backupPaths) > 0 {
+	if len(successfulResults) == 0 && len(backupPaths) > 0 {
 		if len(localErrors) > 0 {
 			return fmt.Errorf("all local backups failed: %v", localErrors[0])
 		}
@@ -221,8 +254,8 @@ func backupFileToAllDestinations(ctx context.Context, path string, info os.FileI
 
 	// Backup to remote destinations sequentially (to avoid bandwidth saturation)
 	// Use the first successful local backup path as the source
-	if len(remoteBackups) > 0 && len(successfulLocalPaths) > 0 {
-		sourcePath := successfulLocalPaths[0]
+	if len(remoteBackups) > 0 && len(successfulResults) > 0 {
+		sourcePath := successfulResults[0].destPath
 
 		for _, remote := range remoteBackups {
 			// Check for cancellation before each remote copy
